@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "error": {
+    "code": "PROVIDER_ERROR",
+    "message": "百度地图步行批量算路服务请求失败。",
+    "retryable": true
+  },
+  "warnings": [],
+  "meta": {"schema_version": "1.0", "provider": "baidu"}
+}

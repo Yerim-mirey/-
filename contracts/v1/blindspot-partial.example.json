@@ -1,0 +1,50 @@
+{
+  "ok": true,
+  "data": {
+    "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+    "analysis_geometry": {"type": "Polygon", "coordinates": [[
+      [121.506623, 31.282906], [121.506623, 31.282006],
+      [121.505623, 31.282006], [121.505623, 31.282906],
+      [121.506623, 31.282906]
+    ]]},
+    "service_distance_m": 1000,
+    "grid_size_m": 200,
+    "blind_spots": {"type": "FeatureCollection", "features": []},
+    "unknown_areas": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "geometry": {"type": "Polygon", "coordinates": [[
+            [121.506623, 31.282906], [121.506623, 31.282006],
+            [121.505623, 31.282006], [121.505623, 31.282906],
+            [121.506623, 31.282906]
+          ]]},
+          "properties": {"cell_id": "grid:r0000:c0000", "facility_type": "market", "classification": "unknown"}
+        },
+        {
+          "type": "Feature",
+          "geometry": {"type": "Polygon", "coordinates": [[
+            [121.506623, 31.282906], [121.506623, 31.282006],
+            [121.505623, 31.282006], [121.505623, 31.282906],
+            [121.506623, 31.282906]
+          ]]},
+          "properties": {"cell_id": "grid:r0000:c0000", "facility_type": "pharmacy", "classification": "unknown"}
+        }
+      ]
+    },
+    "coverage": [
+      {"facility_type": "market", "total_area_m2": 9510.11, "covered_area_m2": 0.0, "blind_area_m2": 0.0, "unknown_area_m2": 9510.11, "covered_ratio": 0.0, "blind_ratio": 0.0, "unknown_ratio": 1.0, "covered_cells": 0, "blind_cells": 0, "unknown_cells": 1, "confidence": "low"},
+      {"facility_type": "pharmacy", "total_area_m2": 9510.11, "covered_area_m2": 0.0, "blind_area_m2": 0.0, "unknown_area_m2": 9510.11, "covered_ratio": 0.0, "blind_ratio": 0.0, "unknown_ratio": 1.0, "covered_cells": 0, "blind_cells": 0, "unknown_cells": 1, "confidence": "low"},
+      {"facility_type": "primary_school", "total_area_m2": 9510.11, "covered_area_m2": 9510.11, "blind_area_m2": 0.0, "unknown_area_m2": 0.0, "covered_ratio": 1.0, "blind_ratio": 0.0, "unknown_ratio": 0.0, "covered_cells": 1, "blind_cells": 0, "unknown_cells": 0, "confidence": "low"}
+    ],
+    "quality": {"grid_cell_count": 1, "route_pairs_requested": 1, "route_pairs_succeeded": 1, "route_pairs_unavailable": 0, "route_budget_exhausted": false, "method": "grid_representative_walking_distance", "confidence": "low"}
+  },
+  "warnings": [
+    {"code": "PARTIAL_POI_RESULTS", "message": "药店设施数据可能不完整。"},
+    {"code": "POI_RADIUS_INSUFFICIENT", "message": "POI 检索范围未覆盖等时圈外 1 公里缓冲。"},
+    {"code": "UNKNOWN_BLINDSPOT_AREA", "message": "存在证据不足、不能判为盲区的网格。"},
+    {"code": "LOW_CONFIDENCE", "message": "本次盲区分析置信度较低。"}
+  ],
+  "meta": {"schema_version": "1.0", "provider": null}
+}

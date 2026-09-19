@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "data": {
+    "origin": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+    "travel_mode": "walking",
+    "routes": [
+      {
+        "target_id": "baidu:123456",
+        "location": {"lng": 121.5081, "lat": 31.2809, "crs": "BD09LL"},
+        "status": "success",
+        "distance_m": 842,
+        "duration_s": 735
+      },
+      {
+        "target_id": "sample:b015:r1200",
+        "location": {"lng": 121.5092, "lat": 31.2921, "crs": "BD09LL"},
+        "status": "success",
+        "distance_m": 1280,
+        "duration_s": 1012
+      }
+    ],
+    "summary": {"requested": 2, "success": 2, "no_route": 0, "unavailable": 0}
+  },
+  "warnings": [],
+  "meta": {"schema_version": "1.0", "provider": "baidu"}
+}

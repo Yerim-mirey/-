@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "error": {
+    "code": "INSUFFICIENT_ROUTING_DATA",
+    "message": "有效步行测时数据不足，无法生成可靠等时圈。",
+    "retryable": true
+  },
+  "warnings": [],
+  "meta": {"schema_version": "1.0", "provider": "baidu"}
+}

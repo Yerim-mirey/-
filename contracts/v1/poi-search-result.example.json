@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "data": {
+    "center": {
+      "lng": 121.506123,
+      "lat": 31.282456,
+      "crs": "BD09LL"
+    },
+    "pois": [
+      {
+        "poi_id": "baidu:123456",
+        "name": "示例大药房",
+        "facility_type": "pharmacy",
+        "location": {
+          "lng": 121.5081,
+          "lat": 31.2809,
+          "crs": "BD09LL"
+        },
+        "address": "上海市杨浦区示例路1号",
+        "source": "baidu"
+      }
+    ],
+    "counts": {
+      "market": 0,
+      "pharmacy": 1,
+      "primary_school": 0
+    }
+  },
+  "warnings": [],
+  "meta": {
+    "schema_version": "1.0",
+    "provider": "baidu"
+  }
+}

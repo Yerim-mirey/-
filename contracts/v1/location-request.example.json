@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "input": {
+    "type": "address",
+    "query": "同济大学四平路校区",
+    "city": "上海市"
+  }
+}

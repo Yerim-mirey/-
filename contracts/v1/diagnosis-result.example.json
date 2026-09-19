@@ -1,0 +1,392 @@
+{
+  "ok": true,
+  "data": {
+    "center": {
+      "lng": 121.506123,
+      "lat": 31.282456,
+      "crs": "BD09LL"
+    },
+    "location_label": null,
+    "poi_search_radius_m": 1170,
+    "poi": {
+      "center": {
+        "lng": 121.506123,
+        "lat": 31.282456,
+        "crs": "BD09LL"
+      },
+      "pois": [
+        {
+          "poi_id": "baidu:mock-pharmacy",
+          "name": "示例药店",
+          "facility_type": "pharmacy",
+          "location": {
+            "lng": 121.506323,
+            "lat": 31.282456,
+            "crs": "BD09LL"
+          },
+          "address": null,
+          "source": "baidu"
+        },
+        {
+          "poi_id": "baidu:mock-school",
+          "name": "示例小学",
+          "facility_type": "primary_school",
+          "location": {
+            "lng": 121.506423,
+            "lat": 31.282456,
+            "crs": "BD09LL"
+          },
+          "address": null,
+          "source": "baidu"
+        }
+      ],
+      "counts": {
+        "market": 0,
+        "pharmacy": 1,
+        "primary_school": 1
+      }
+    },
+    "facility_routes": {
+      "origin": {
+        "lng": 121.506123,
+        "lat": 31.282456,
+        "crs": "BD09LL"
+      },
+      "travel_mode": "walking",
+      "routes": [
+        {
+          "target_id": "baidu:mock-pharmacy",
+          "location": {
+            "lng": 121.506323,
+            "lat": 31.282456,
+            "crs": "BD09LL"
+          },
+          "status": "success",
+          "distance_m": 800,
+          "duration_s": 600
+        },
+        {
+          "target_id": "baidu:mock-school",
+          "location": {
+            "lng": 121.506423,
+            "lat": 31.282456,
+            "crs": "BD09LL"
+          },
+          "status": "success",
+          "distance_m": 1300,
+          "duration_s": 1000
+        }
+      ],
+      "summary": {
+        "requested": 2,
+        "success": 2,
+        "no_route": 0,
+        "unavailable": 0
+      }
+    },
+    "isochrone": {
+      "center": {
+        "lng": 121.506123,
+        "lat": 31.282456,
+        "crs": "BD09LL"
+      },
+      "time_limit_s": 900,
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              121.506623,
+              31.282906
+            ],
+            [
+              121.506623,
+              31.282006
+            ],
+            [
+              121.505623,
+              31.282006
+            ],
+            [
+              121.505623,
+              31.282906
+            ],
+            [
+              121.506623,
+              31.282906
+            ]
+          ]
+        ]
+      },
+      "boundary_points": [
+        {
+          "boundary_id": "boundary:b045",
+          "bearing_deg": 45.0,
+          "location": {
+            "lng": 121.506623,
+            "lat": 31.282906,
+            "crs": "BD09LL"
+          },
+          "radial_distance_m": 69.0
+        },
+        {
+          "boundary_id": "boundary:b135",
+          "bearing_deg": 135.0,
+          "location": {
+            "lng": 121.506623,
+            "lat": 31.282006,
+            "crs": "BD09LL"
+          },
+          "radial_distance_m": 69.0
+        },
+        {
+          "boundary_id": "boundary:b225",
+          "bearing_deg": 225.0,
+          "location": {
+            "lng": 121.505623,
+            "lat": 31.282006,
+            "crs": "BD09LL"
+          },
+          "radial_distance_m": 69.0
+        },
+        {
+          "boundary_id": "boundary:b315",
+          "bearing_deg": 315.0,
+          "location": {
+            "lng": 121.505623,
+            "lat": 31.282906,
+            "crs": "BD09LL"
+          },
+          "radial_distance_m": 69.0
+        }
+      ],
+      "quality": {
+        "requested_directions": 4,
+        "valid_boundary_directions": 4,
+        "routing_sample_count": 24,
+        "routing_success_count": 24,
+        "sample_success_rate": 1.0,
+        "confidence": "high"
+      }
+    },
+    "blindspot": {
+      "center": {
+        "lng": 121.506123,
+        "lat": 31.282456,
+        "crs": "BD09LL"
+      },
+      "analysis_geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              121.506623,
+              31.282906
+            ],
+            [
+              121.506623,
+              31.282006
+            ],
+            [
+              121.505623,
+              31.282006
+            ],
+            [
+              121.505623,
+              31.282906
+            ],
+            [
+              121.506623,
+              31.282906
+            ]
+          ]
+        ]
+      },
+      "service_distance_m": 1000,
+      "grid_size_m": 200,
+      "blind_spots": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    121.506623,
+                    31.282006
+                  ],
+                  [
+                    121.505623,
+                    31.282006
+                  ],
+                  [
+                    121.505623,
+                    31.282906
+                  ],
+                  [
+                    121.506623,
+                    31.282906
+                  ],
+                  [
+                    121.506623,
+                    31.282006
+                  ]
+                ]
+              ]
+            },
+            "properties": {
+              "cell_id": "grid:r0000:c0000",
+              "facility_type": "market",
+              "classification": "blind"
+            }
+          },
+          {
+            "type": "Feature",
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    121.506623,
+                    31.282006
+                  ],
+                  [
+                    121.505623,
+                    31.282006
+                  ],
+                  [
+                    121.505623,
+                    31.282906
+                  ],
+                  [
+                    121.506623,
+                    31.282906
+                  ],
+                  [
+                    121.506623,
+                    31.282006
+                  ]
+                ]
+              ]
+            },
+            "properties": {
+              "cell_id": "grid:r0000:c0000",
+              "facility_type": "primary_school",
+              "classification": "blind"
+            }
+          }
+        ]
+      },
+      "unknown_areas": {
+        "type": "FeatureCollection",
+        "features": []
+      },
+      "coverage": [
+        {
+          "facility_type": "market",
+          "total_area_m2": 9510.11180479693,
+          "covered_area_m2": 0.0,
+          "blind_area_m2": 9510.11180479693,
+          "unknown_area_m2": 0.0,
+          "covered_ratio": 0.0,
+          "blind_ratio": 1.0,
+          "unknown_ratio": 0.0,
+          "covered_cells": 0,
+          "blind_cells": 1,
+          "unknown_cells": 0,
+          "confidence": "high"
+        },
+        {
+          "facility_type": "pharmacy",
+          "total_area_m2": 9510.11180479693,
+          "covered_area_m2": 9510.11180479693,
+          "blind_area_m2": 0.0,
+          "unknown_area_m2": 0.0,
+          "covered_ratio": 1.0,
+          "blind_ratio": 0.0,
+          "unknown_ratio": 0.0,
+          "covered_cells": 1,
+          "blind_cells": 0,
+          "unknown_cells": 0,
+          "confidence": "high"
+        },
+        {
+          "facility_type": "primary_school",
+          "total_area_m2": 9510.11180479693,
+          "covered_area_m2": 0.0,
+          "blind_area_m2": 9510.11180479693,
+          "unknown_area_m2": 0.0,
+          "covered_ratio": 0.0,
+          "blind_ratio": 1.0,
+          "unknown_ratio": 0.0,
+          "covered_cells": 0,
+          "blind_cells": 1,
+          "unknown_cells": 0,
+          "confidence": "high"
+        }
+      ],
+      "quality": {
+        "grid_cell_count": 1,
+        "route_pairs_requested": 2,
+        "route_pairs_succeeded": 2,
+        "route_pairs_unavailable": 0,
+        "route_budget_exhausted": false,
+        "method": "grid_representative_walking_distance",
+        "confidence": "high"
+      }
+    },
+    "metrics": [
+      {
+        "facility_type": "market",
+        "poi_count": 0,
+        "confirmed_reachable_15m_count": 0,
+        "unresolved_route_count": 0,
+        "nearest_walk_distance_m": null,
+        "nearest_walk_duration_s": null,
+        "covered_ratio": 0.0,
+        "blind_ratio": 1.0,
+        "unknown_ratio": 0.0
+      },
+      {
+        "facility_type": "pharmacy",
+        "poi_count": 1,
+        "confirmed_reachable_15m_count": 1,
+        "unresolved_route_count": 0,
+        "nearest_walk_distance_m": 800,
+        "nearest_walk_duration_s": 600,
+        "covered_ratio": 1.0,
+        "blind_ratio": 0.0,
+        "unknown_ratio": 0.0
+      },
+      {
+        "facility_type": "primary_school",
+        "poi_count": 1,
+        "confirmed_reachable_15m_count": 0,
+        "unresolved_route_count": 0,
+        "nearest_walk_distance_m": 1300,
+        "nearest_walk_duration_s": 1000,
+        "covered_ratio": 0.0,
+        "blind_ratio": 1.0,
+        "unknown_ratio": 0.0
+      }
+    ],
+    "stages": {
+      "location": "complete",
+      "poi": "complete",
+      "routing": "complete",
+      "isochrone": "complete",
+      "blindspot": "complete"
+    },
+    "quality": {
+      "confidence": "high",
+      "method": "sampled_isochrone_and_grid_walking_distance"
+    }
+  },
+  "warnings": [],
+  "meta": {
+    "schema_version": "1.0",
+    "provider": null
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "data": {
+    "center": {
+      "lng": 121.506123,
+      "lat": 31.282456,
+      "crs": "BD09LL"
+    },
+    "pois": [],
+    "counts": {
+      "market": 0,
+      "pharmacy": 0,
+      "primary_school": 0
+    }
+  },
+  "warnings": [],
+  "meta": {
+    "schema_version": "1.0",
+    "provider": "baidu"
+  }
+}

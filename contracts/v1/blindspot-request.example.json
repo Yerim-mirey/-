@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "poi_request": {
+    "schema_version": "1.0",
+    "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+    "facility_types": ["market", "pharmacy", "primary_school"],
+    "search_radius_m": 1200
+  },
+  "poi_result": {
+    "ok": true,
+    "data": {
+      "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+      "pois": [
+        {"poi_id": "baidu:mock-pharmacy", "name": "示例药店", "facility_type": "pharmacy", "location": {"lng": 121.506323, "lat": 31.282456, "crs": "BD09LL"}, "address": null, "source": "baidu"},
+        {"poi_id": "baidu:mock-school", "name": "示例小学", "facility_type": "primary_school", "location": {"lng": 121.506423, "lat": 31.282456, "crs": "BD09LL"}, "address": null, "source": "baidu"}
+      ],
+      "counts": {"market": 0, "pharmacy": 1, "primary_school": 1}
+    },
+    "warnings": [],
+    "meta": {"schema_version": "1.0", "provider": null}
+  },
+  "isochrone_result": {
+    "ok": true,
+    "data": {
+      "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+      "time_limit_s": 900,
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [121.506623, 31.282906],
+          [121.506623, 31.282006],
+          [121.505623, 31.282006],
+          [121.505623, 31.282906],
+          [121.506623, 31.282906]
+        ]]
+      },
+      "boundary_points": [
+        {"boundary_id": "boundary:b045", "bearing_deg": 45.0, "location": {"lng": 121.506623, "lat": 31.282906, "crs": "BD09LL"}, "radial_distance_m": 69.0},
+        {"boundary_id": "boundary:b135", "bearing_deg": 135.0, "location": {"lng": 121.506623, "lat": 31.282006, "crs": "BD09LL"}, "radial_distance_m": 69.0},
+        {"boundary_id": "boundary:b225", "bearing_deg": 225.0, "location": {"lng": 121.505623, "lat": 31.282006, "crs": "BD09LL"}, "radial_distance_m": 69.0},
+        {"boundary_id": "boundary:b315", "bearing_deg": 315.0, "location": {"lng": 121.505623, "lat": 31.282906, "crs": "BD09LL"}, "radial_distance_m": 69.0}
+      ],
+      "quality": {"requested_directions": 4, "valid_boundary_directions": 4, "routing_sample_count": 24, "routing_success_count": 24, "sample_success_rate": 1.0, "confidence": "high"}
+    },
+    "warnings": [],
+    "meta": {"schema_version": "1.0", "provider": null}
+  },
+  "service_distance_m": 1000,
+  "grid_size_m": 200,
+  "max_route_pairs": 5000
+}

@@ -1,0 +1,5 @@
+{
+  "schema_version": "1.0",
+  "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+  "time_limit_s": 900
+}

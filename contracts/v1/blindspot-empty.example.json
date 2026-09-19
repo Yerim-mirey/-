@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "data": {
+    "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+    "analysis_geometry": {"type": "Polygon", "coordinates": [[
+      [121.506623, 31.282906], [121.506623, 31.282006],
+      [121.505623, 31.282006], [121.505623, 31.282906],
+      [121.506623, 31.282906]
+    ]]},
+    "service_distance_m": 1000,
+    "grid_size_m": 200,
+    "blind_spots": {"type": "FeatureCollection", "features": []},
+    "unknown_areas": {"type": "FeatureCollection", "features": []},
+    "coverage": [
+      {"facility_type": "market", "total_area_m2": 9510.11, "covered_area_m2": 9510.11, "blind_area_m2": 0.0, "unknown_area_m2": 0.0, "covered_ratio": 1.0, "blind_ratio": 0.0, "unknown_ratio": 0.0, "covered_cells": 1, "blind_cells": 0, "unknown_cells": 0, "confidence": "high"},
+      {"facility_type": "pharmacy", "total_area_m2": 9510.11, "covered_area_m2": 9510.11, "blind_area_m2": 0.0, "unknown_area_m2": 0.0, "covered_ratio": 1.0, "blind_ratio": 0.0, "unknown_ratio": 0.0, "covered_cells": 1, "blind_cells": 0, "unknown_cells": 0, "confidence": "high"},
+      {"facility_type": "primary_school", "total_area_m2": 9510.11, "covered_area_m2": 9510.11, "blind_area_m2": 0.0, "unknown_area_m2": 0.0, "covered_ratio": 1.0, "blind_ratio": 0.0, "unknown_ratio": 0.0, "covered_cells": 1, "blind_cells": 0, "unknown_cells": 0, "confidence": "high"}
+    ],
+    "quality": {"grid_cell_count": 1, "route_pairs_requested": 3, "route_pairs_succeeded": 3, "route_pairs_unavailable": 0, "route_budget_exhausted": false, "method": "grid_representative_walking_distance", "confidence": "high"}
+  },
+  "warnings": [],
+  "meta": {"schema_version": "1.0", "provider": null}
+}

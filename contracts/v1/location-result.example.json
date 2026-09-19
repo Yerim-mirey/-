@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "data": {
+    "center": {
+      "lng": 121.506123,
+      "lat": 31.282456,
+      "crs": "BD09LL"
+    },
+    "label": "同济大学四平路校区",
+    "formatted_address": "上海市杨浦区四平路1239号",
+    "source": "baidu_geocoding"
+  },
+  "warnings": [],
+  "meta": {
+    "schema_version": "1.0",
+    "provider": "baidu"
+  }
+}

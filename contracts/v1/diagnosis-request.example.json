@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "location": {"type": "coordinate", "lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+  "facility_types": ["market", "pharmacy", "primary_school"],
+  "time_limit_s": 900,
+  "service_distance_m": 1000,
+  "grid_size_m": 200
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "center": {
+    "lng": 121.506123,
+    "lat": 31.282456,
+    "crs": "BD09LL"
+  },
+  "facility_types": [
+    "market",
+    "pharmacy",
+    "primary_school"
+  ],
+  "search_radius_m": 1500
+}

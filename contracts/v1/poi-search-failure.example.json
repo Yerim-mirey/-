@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "error": {
+    "code": "PROVIDER_ERROR",
+    "message": "百度地图 POI 服务请求失败。",
+    "retryable": true
+  },
+  "warnings": [],
+  "meta": {
+    "schema_version": "1.0",
+    "provider": "baidu"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "ok": true,
+  "data": {
+    "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+    "time_limit_s": 900,
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [[
+        [121.506123, 31.291234],
+        [121.515101, 31.282456],
+        [121.506123, 31.273678],
+        [121.497145, 31.282456],
+        [121.506123, 31.291234]
+      ]]
+    },
+    "boundary_points": [
+      {"boundary_id": "boundary:b000", "bearing_deg": 0.0, "location": {"lng": 121.506123, "lat": 31.291234, "crs": "BD09LL"}, "radial_distance_m": 975.0},
+      {"boundary_id": "boundary:b090", "bearing_deg": 90.0, "location": {"lng": 121.515101, "lat": 31.282456, "crs": "BD09LL"}, "radial_distance_m": 860.0},
+      {"boundary_id": "boundary:b180", "bearing_deg": 180.0, "location": {"lng": 121.506123, "lat": 31.273678, "crs": "BD09LL"}, "radial_distance_m": 975.0},
+      {"boundary_id": "boundary:b270", "bearing_deg": 270.0, "location": {"lng": 121.497145, "lat": 31.282456, "crs": "BD09LL"}, "radial_distance_m": 860.0}
+    ],
+    "quality": {
+      "requested_directions": 4,
+      "valid_boundary_directions": 4,
+      "routing_sample_count": 24,
+      "routing_success_count": 24,
+      "sample_success_rate": 1.0,
+      "confidence": "high"
+    }
+  },
+  "warnings": [],
+  "meta": {"schema_version": "1.0", "provider": "baidu"}
+}

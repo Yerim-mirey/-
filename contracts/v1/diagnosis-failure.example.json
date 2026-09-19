@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "error": {
+    "code": "LOCATION_FAILED",
+    "message": "位置解析失败。",
+    "retryable": false
+  },
+  "warnings": [],
+  "meta": {"schema_version": "1.0", "provider": null}
+}
