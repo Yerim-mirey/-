@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "intent": "planning_analysis",
+  "user_goal": "体检该社区并提出有证据支持的设施改善建议",
+  "location": {"type": "address", "query": "上海市虹口区四川北路街道", "city": "上海市"},
+  "facility_types": ["market", "pharmacy", "primary_school"],
+  "needs_full_diagnosis": true,
+  "needs_planning": true,
+  "needs_review": true,
+  "missing_information": []
+}

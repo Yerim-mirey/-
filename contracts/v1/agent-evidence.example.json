@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "bundle_id": "evidence:location-center",
+  "refs": [{
+    "evidence_id": "location:center",
+    "kind": "location",
+    "json_pointer": "/location/data/center",
+    "summary": "中心点已由地址解析得到"
+  }],
+  "location": {
+    "ok": true,
+    "data": {
+      "center": {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"},
+      "label": "四川北路街道",
+      "formatted_address": "上海市虹口区四川北路街道",
+      "source": "baidu_geocoding"
+    },
+    "warnings": [],
+    "meta": {"schema_version": "1.0", "provider": "baidu"}
+  },
+  "poi": null,
+  "routing": null,
+  "isochrone": null,
+  "blindspot": null,
+  "diagnosis": null,
+  "warnings": []
+}
