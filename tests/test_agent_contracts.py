@@ -27,6 +27,14 @@ def test_evidence_example_validates_without_root_in_public_pointer():
     assert evidence.location.root.ok is True
 
 
+@pytest.mark.parametrize("json_pointer", ["/location/root/data/center", "/location/root"])
+def test_evidence_pointer_rejects_root_model_token(json_pointer):
+    payload = load("agent-evidence.example.json")
+    payload["refs"][0]["json_pointer"] = json_pointer
+    with pytest.raises(ValidationError):
+        EvidenceBundle.model_validate(payload)
+
+
 @pytest.mark.parametrize("field", ["needs_full_diagnosis", "needs_planning", "needs_review"])
 def test_planning_intent_requires_all_planning_flags(field):
     payload = load("agent-brief.example.json")

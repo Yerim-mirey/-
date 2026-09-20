@@ -93,8 +93,14 @@ class EvidenceRef(ContractModel):
     def identity_matches_kind(self) -> "EvidenceRef":
         if self.evidence_id.split(":", 1)[0] != self.kind.value:
             raise ValueError("evidence_id 前缀必须与 kind 一致。")
-        if self.json_pointer.split("/", 2)[1] != self.kind.value:
+        tokens = [
+            token.replace("~1", "/").replace("~0", "~")
+            for token in self.json_pointer.split("/")[1:]
+        ]
+        if tokens[0] != self.kind.value:
             raise ValueError("json_pointer 根必须与 kind 一致。")
+        if "root" in tokens:
+            raise ValueError("json_pointer 不得暴露 RootModel.root。")
         return self
 
 
