@@ -15,6 +15,13 @@ from app.schemas.blindspot import (
     BlindspotResult,
     validate_blindspot_exchange,
 )
+from app.schemas.agent import (
+    AgentRunState,
+    EvidenceBundle,
+    LifeCircleBrief,
+    PlanningProposal,
+    ReviewResult,
+)
 from app.schemas.diagnosis import DiagnosisRequest, DiagnosisResult, validate_diagnosis_exchange
 from app.schemas.location import LocationRequest, LocationResult
 from app.schemas.isochrone import IsochroneRequest, IsochroneResult
@@ -71,6 +78,11 @@ def main() -> None:
     DiagnosisResult.model_validate(load("diagnosis-failure.example.json"))
     validate_diagnosis_exchange(diagnosis_request, diagnosis_result)
     validate_diagnosis_exchange(diagnosis_request, diagnosis_partial)
+    LifeCircleBrief.model_validate(load("agent-brief.example.json"))
+    EvidenceBundle.model_validate(load("agent-evidence.example.json"))
+    PlanningProposal.model_validate(load("agent-planning-proposal.example.json"))
+    ReviewResult.model_validate(load("agent-review-result.example.json"))
+    AgentRunState.model_validate(load("agent-run-state.example.json"))
 
     must_reject(
         CenterPoint,
@@ -113,7 +125,7 @@ def main() -> None:
     mixed_diagnosis["error"] = load("diagnosis-failure.example.json")["error"]
     must_reject(DiagnosisResult, mixed_diagnosis)
 
-    print("Core MVP Tool 1-6 v1 contracts validated successfully.")
+    print("Core MVP Tool 1-6 and Agent v1 contracts validated successfully.")
 
 
 if __name__ == "__main__":

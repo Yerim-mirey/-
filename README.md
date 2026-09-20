@@ -16,6 +16,10 @@
 | `app/api/main.py` | FastAPI 薄接口：健康检查、Location、Diagnosis；直接复用现有 Tool Contract |
 | `data/`、`docs/`、`demo/` | 保存去敏样本、架构与验收记录、现有地图 Demo；正式 Web 尚待开发 |
 
+### Agent v1 Phase 1
+
+Agent 层已进入 Contract 阶段：`app/schemas/agent.py` 定义 Brief、Evidence、Planning、Review 与 Run State 的共享结构，示例位于 `contracts/v1/`。这一阶段只建立数据契约，不实现 Agent 行为、流程路由、真实 LLM 调用或 MVP Gateway；Tool 1–6 仍是唯一的确定性事实层。
+
 项目长期分层是：用户界面 / 未来 Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前阶段先完成确定性的 Core Tool，不提前搭建 Agent、MCP 或复杂 Runtime。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
