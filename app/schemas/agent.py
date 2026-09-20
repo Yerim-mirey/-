@@ -17,6 +17,28 @@ from app.schemas.routing import RoutingResult
 AgentSchemaVersion = Literal["1.0"]
 NonEmptyText = Annotated[str, Field(min_length=1)]
 Facility = Annotated[FacilityType, Field(strict=False)]
+JsonPointer = Annotated[
+    str,
+    Field(min_length=2, pattern=r"^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])*)*$"),
+]
+EvidenceId = Annotated[
+    str,
+    Field(pattern=r"^(location|poi|routing|isochrone|blindspot|diagnosis):[a-z0-9][a-z0-9._-]*$"),
+]
+EvidenceBundleId = Annotated[str, Field(pattern=r"^evidence:[a-z0-9][a-z0-9._-]*$")]
+IssueId = Annotated[str, Field(pattern=r"^issue:[a-z0-9][a-z0-9._-]*$")]
+RecommendationId = Annotated[str, Field(pattern=r"^recommendation:[a-z0-9][a-z0-9._-]*$")]
+ProposalId = Annotated[str, Field(pattern=r"^proposal:[a-z0-9][a-z0-9._-]*$")]
+RequestId = Annotated[str, Field(pattern=r"^request:[a-z0-9][a-z0-9._-]*$")]
+ReviewIssueId = Annotated[str, Field(pattern=r"^review:[a-z0-9][a-z0-9._-]*$")]
+RunId = Annotated[str, Field(pattern=r"^run:[a-z0-9][a-z0-9._-]*$")]
+
+
+def _decoded_json_pointer_tokens(pointer: str) -> list[str]:
+    return [
+        token.replace("~1", "/").replace("~0", "~")
+        for token in pointer.split("/")[1:]
+    ]
 
 
 class AgentIntent(str, Enum):
@@ -81,22 +103,16 @@ class LifeCircleBrief(ContractModel):
 
 
 class EvidenceRef(ContractModel):
-    evidence_id: str = Field(pattern=r"^(location|poi|routing|isochrone|blindspot|diagnosis):[a-z0-9][a-z0-9._-]*$")
+    evidence_id: EvidenceId
     kind: EvidenceKind = Field(strict=False)
-    json_pointer: str = Field(
-        min_length=2,
-        pattern=r"^/(location|poi|routing|isochrone|blindspot|diagnosis)(?:/(?:[^/~]|~[01])*)*$",
-    )
+    json_pointer: JsonPointer
     summary: NonEmptyText
 
     @model_validator(mode="after")
     def identity_matches_kind(self) -> "EvidenceRef":
         if self.evidence_id.split(":", 1)[0] != self.kind.value:
             raise ValueError("evidence_id 前缀必须与 kind 一致。")
-        tokens = [
-            token.replace("~1", "/").replace("~0", "~")
-            for token in self.json_pointer.split("/")[1:]
-        ]
+        tokens = _decoded_json_pointer_tokens(self.json_pointer)
         if tokens[0] != self.kind.value:
             raise ValueError("json_pointer 根必须与 kind 一致。")
         if "root" in tokens:
@@ -106,7 +122,7 @@ class EvidenceRef(ContractModel):
 
 class EvidenceBundle(ContractModel):
     schema_version: AgentSchemaVersion
-    bundle_id: str = Field(pattern=r"^evidence:[a-z0-9][a-z0-9._-]*$")
+    bundle_id: EvidenceBundleId
     refs: list[EvidenceRef] = Field(min_length=1)
     location: LocationResult | None = None
     poi: POISearchResult | None = None
@@ -139,29 +155,29 @@ class PlanningPriority(str, Enum):
 
 
 class PlanningIssue(ContractModel):
-    issue_id: str = Field(pattern=r"^issue:[a-z0-9][a-z0-9._-]*$")
+    issue_id: IssueId
     title: NonEmptyText
     description: NonEmptyText
     priority: PlanningPriority = Field(strict=False)
     facility_type: Facility | None = None
-    evidence_refs: list[NonEmptyText] = Field(min_length=1)
+    evidence_refs: list[EvidenceId] = Field(min_length=1)
 
 
 class PlanningRecommendation(ContractModel):
-    recommendation_id: str = Field(pattern=r"^recommendation:[a-z0-9][a-z0-9._-]*$")
+    recommendation_id: RecommendationId
     title: NonEmptyText
     rationale: NonEmptyText
     priority: PlanningPriority = Field(strict=False)
     actions: list[NonEmptyText] = Field(min_length=1)
-    evidence_refs: list[NonEmptyText] = Field(min_length=1)
+    evidence_refs: list[EvidenceId] = Field(min_length=1)
     limitations: list[NonEmptyText] = Field(default_factory=list)
 
 
 class PlanningProposal(ContractModel):
     schema_version: AgentSchemaVersion
-    proposal_id: str = Field(pattern=r"^proposal:[a-z0-9][a-z0-9._-]*$")
+    proposal_id: ProposalId
     planning_round: int = Field(ge=1)
-    evidence_bundle_id: str = Field(pattern=r"^evidence:[a-z0-9][a-z0-9._-]*$")
+    evidence_bundle_id: EvidenceBundleId
     summary: NonEmptyText
     issues: list[PlanningIssue] = Field(min_length=1)
     recommendations: list[PlanningRecommendation] = Field(min_length=1)
@@ -180,10 +196,10 @@ class PlanningProposal(ContractModel):
 
 
 class EvidenceRequest(ContractModel):
-    request_id: str = Field(pattern=r"^request:[a-z0-9][a-z0-9._-]*$")
+    request_id: RequestId
     kind: Literal["diagnosis"]
     reason: NonEmptyText
-    required_json_pointers: list[NonEmptyText] = Field(min_length=1)
+    required_json_pointers: list[JsonPointer] = Field(min_length=1)
     facility_types: list[Facility] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -192,8 +208,10 @@ class EvidenceRequest(ContractModel):
             raise ValueError("required_json_pointers 不能重复。")
         if len(set(self.facility_types)) != len(self.facility_types):
             raise ValueError("EvidenceRequest facility_types 不能重复。")
-        if any(not pointer.startswith("/diagnosis/") for pointer in self.required_json_pointers):
-            raise ValueError("Agent v1 补证据只能请求 Diagnosis JSON Pointer。")
+        for pointer in self.required_json_pointers:
+            tokens = _decoded_json_pointer_tokens(pointer)
+            if tokens[0] != self.kind or "root" in tokens:
+                raise ValueError("Agent v1 补证据只能请求不暴露 RootModel.root 的 Diagnosis JSON Pointer。")
         return self
 
 
@@ -213,19 +231,19 @@ class ReviewIssueCategory(str, Enum):
 
 
 class ReviewIssue(ContractModel):
-    issue_id: str = Field(pattern=r"^review:[a-z0-9][a-z0-9._-]*$")
+    issue_id: ReviewIssueId
     category: ReviewIssueCategory = Field(strict=False)
     message: NonEmptyText
-    recommendation_ids: list[NonEmptyText] = Field(default_factory=list)
-    evidence_refs: list[NonEmptyText] = Field(default_factory=list)
+    recommendation_ids: list[RecommendationId] = Field(default_factory=list)
+    evidence_refs: list[EvidenceId] = Field(default_factory=list)
 
 
 class ReviewResult(ContractModel):
     schema_version: AgentSchemaVersion
     status: ReviewStatus = Field(strict=False)
-    reviewed_proposal_id: str = Field(pattern=r"^proposal:[a-z0-9][a-z0-9._-]*$")
+    reviewed_proposal_id: ProposalId
     reviewed_planning_round: int = Field(ge=1)
-    reviewed_evidence_bundle_id: str = Field(pattern=r"^evidence:[a-z0-9][a-z0-9._-]*$")
+    reviewed_evidence_bundle_id: EvidenceBundleId
     issues: list[ReviewIssue]
     revision_instructions: list[NonEmptyText]
     missing_evidence: list[EvidenceRequest]
@@ -262,7 +280,7 @@ class CompletionMode(str, Enum):
 
 class AgentRunState(ContractModel):
     schema_version: AgentSchemaVersion
-    run_id: str = Field(pattern=r"^run:[a-z0-9][a-z0-9._-]*$")
+    run_id: RunId
     status: RunStatus = Field(strict=False)
     completion_mode: Annotated[CompletionMode, Field(strict=False)] | None = None
     user_message: NonEmptyText

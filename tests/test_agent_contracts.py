@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.agent import EvidenceBundle, LifeCircleBrief
+from app.schemas.agent import EvidenceBundle, EvidenceRequest, LifeCircleBrief
 
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts" / "v1"
@@ -33,6 +33,44 @@ def test_evidence_pointer_rejects_root_model_token(json_pointer):
     payload["refs"][0]["json_pointer"] = json_pointer
     with pytest.raises(ValidationError):
         EvidenceBundle.model_validate(payload)
+
+
+@pytest.mark.parametrize("json_pointer", ["/diagnosis/data~", "/diagnosis/root/data"])
+def test_evidence_request_rejects_invalid_public_pointer(json_pointer):
+    with pytest.raises(ValidationError):
+        EvidenceRequest.model_validate({
+            "request_id": "request:diagnosis-refresh",
+            "kind": "diagnosis",
+            "reason": "需要新的诊断结果",
+            "required_json_pointers": [json_pointer],
+            "facility_types": ["market"],
+        })
+
+
+@pytest.mark.parametrize(
+    "json_pointer",
+    ["/diagnosis/data~0name", "/diagnosis/data~1name", "/diagnosis/data/metrics"],
+)
+def test_evidence_request_accepts_valid_public_pointer(json_pointer):
+    request = EvidenceRequest.model_validate({
+        "request_id": "request:diagnosis-refresh",
+        "kind": "diagnosis",
+        "reason": "需要新的诊断结果",
+        "required_json_pointers": [json_pointer],
+        "facility_types": ["market"],
+    })
+    assert request.required_json_pointers == [json_pointer]
+
+
+def test_evidence_request_rejects_duplicate_pointers():
+    with pytest.raises(ValidationError):
+        EvidenceRequest.model_validate({
+            "request_id": "request:diagnosis-refresh",
+            "kind": "diagnosis",
+            "reason": "需要新的诊断结果",
+            "required_json_pointers": ["/diagnosis/data/metrics"] * 2,
+            "facility_types": ["market"],
+        })
 
 
 @pytest.mark.parametrize("field", ["needs_full_diagnosis", "needs_planning", "needs_review"])
@@ -150,6 +188,94 @@ def test_issue_and_recommendation_require_unique_evidence_refs():
     payload["recommendations"][0]["evidence_refs"] *= 2
     with pytest.raises(ValidationError):
         PlanningProposal.model_validate(payload)
+
+
+def test_planning_consumers_reject_invalid_reference_id():
+    from app.schemas.agent import PlanningProposal
+
+    payload = load("agent-planning-proposal.example.json")
+    payload["issues"][0]["evidence_refs"] = ["garbage"]
+    with pytest.raises(ValidationError):
+        PlanningProposal.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "invalid_id",
+    ["https://example.com", "recommendation:future", "diagnosis:Invalid Name", "diagnosis:bad?"],
+)
+@pytest.mark.parametrize("field", ["issues", "recommendations"])
+def test_planning_consumers_reject_malformed_evidence_ids(field, invalid_id):
+    from app.schemas.agent import PlanningProposal
+
+    payload = load("agent-planning-proposal.example.json")
+    payload[field][0]["evidence_refs"] = [invalid_id]
+    with pytest.raises(ValidationError):
+        PlanningProposal.model_validate(payload)
+
+
+def test_planning_consumers_accept_valid_unresolved_evidence_ids():
+    from app.schemas.agent import PlanningProposal
+
+    payload = load("agent-planning-proposal.example.json")
+    payload["issues"][0]["evidence_refs"] = ["diagnosis:future-evidence"]
+    payload["recommendations"][0]["evidence_refs"] = ["diagnosis:future-evidence"]
+    proposal = PlanningProposal.model_validate(payload)
+    assert proposal.issues[0].evidence_refs == ["diagnosis:future-evidence"]
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_ids"),
+    [
+        (
+            "recommendation_ids",
+            ["garbage", "https://example.com", "diagnosis:future", "recommendation:Invalid Name", "recommendation:bad?"],
+        ),
+        (
+            "evidence_refs",
+            ["garbage", "https://example.com", "recommendation:future", "diagnosis:Invalid Name", "diagnosis:bad?"],
+        ),
+    ],
+)
+def test_review_consumers_reject_malformed_reference_ids(field, invalid_ids):
+    from app.schemas.agent import ReviewResult
+
+    for invalid_id in invalid_ids:
+        payload = load("agent-review-result.example.json")
+        payload.update({
+            "status": "revision_required",
+            "issues": [{
+                "issue_id": "review:unsupported",
+                "category": "unsupported_fact",
+                "message": "建议需要补充证据",
+                "recommendation_ids": [],
+                "evidence_refs": [],
+            }],
+            "revision_instructions": [],
+            "missing_evidence": [],
+        })
+        payload["issues"][0][field] = [invalid_id]
+        with pytest.raises(ValidationError):
+            ReviewResult.model_validate(payload)
+
+
+def test_review_consumers_accept_valid_unresolved_ids():
+    from app.schemas.agent import ReviewResult
+
+    payload = load("agent-review-result.example.json")
+    payload.update({
+        "status": "revision_required",
+        "issues": [{
+            "issue_id": "review:unsupported",
+            "category": "unsupported_fact",
+            "message": "建议需要补充证据",
+            "recommendation_ids": ["recommendation:future-plan"],
+            "evidence_refs": ["diagnosis:future-evidence"],
+        }],
+        "revision_instructions": [],
+        "missing_evidence": [],
+    })
+    review = ReviewResult.model_validate(payload)
+    assert review.issues[0].recommendation_ids == ["recommendation:future-plan"]
 
 
 def test_planning_ids_are_unique():
