@@ -212,3 +212,94 @@ def test_insufficient_evidence_requires_structured_request():
     }]
     with pytest.raises(ValidationError):
         ReviewResult.model_validate(payload)
+
+
+def completed_state_payload() -> dict:
+    payload = load("agent-run-state.example.json")
+    payload.update({
+        "status": "completed",
+        "completion_mode": "normal",
+        "brief": load("agent-brief.example.json"),
+        "evidence": diagnosis_evidence_payload(),
+        "planning_proposal": load("agent-planning-proposal.example.json"),
+        "review_result": load("agent-review-result.example.json"),
+        "planning_round": 1
+    })
+    return payload
+
+
+def test_initialized_run_state_example_validates():
+    from app.schemas.agent import AgentRunState, RunStatus
+
+    state = AgentRunState.model_validate(load("agent-run-state.example.json"))
+    assert state.status is RunStatus.PENDING
+
+
+def test_missing_brief_information_has_explicit_waiting_state():
+    from app.schemas.agent import AgentRunState, RunStatus
+
+    brief = load("agent-brief.example.json")
+    brief["location"] = None
+    brief["missing_information"] = [{"field": "location", "message": "需要社区地址或中心点"}]
+    payload = load("agent-run-state.example.json")
+    payload.update({"status": "waiting_for_input", "brief": brief})
+    state = AgentRunState.model_validate(payload)
+    assert state.status is RunStatus.WAITING_FOR_INPUT
+    payload["status"] = "running"
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(payload)
+
+
+@pytest.mark.parametrize("missing", ["brief", "evidence"])
+def test_completed_run_requires_brief_and_evidence(missing):
+    from app.schemas.agent import AgentRunState
+
+    payload = completed_state_payload()
+    payload[missing] = None
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(payload)
+
+
+def test_proposal_requires_matching_evidence_and_round():
+    from app.schemas.agent import AgentRunState
+
+    payload = completed_state_payload()
+    payload.update({"status": "running", "completion_mode": None, "review_result": None, "planning_round": 2})
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(payload)
+
+
+def test_review_requires_matching_proposal_identity():
+    from app.schemas.agent import AgentRunState
+
+    payload = completed_state_payload()
+    payload["review_result"]["reviewed_proposal_id"] = "proposal:wrong-r1"
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(payload)
+
+
+def test_failed_run_requires_error_and_pending_requires_zero_counters():
+    from app.schemas.agent import AgentRunState
+
+    failed = load("agent-run-state.example.json")
+    failed["status"] = "failed"
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(failed)
+    pending = load("agent-run-state.example.json")
+    pending["tool_retry_count"] = 1
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(pending)
+
+
+def test_all_agent_contracts_are_publicly_exported():
+    import app.schemas as schemas
+
+    expected = {
+        "AgentIntent", "AgentRunState", "AgentSchemaVersion", "BriefMissingField",
+        "CompletionMode", "EvidenceBundle", "EvidenceKind", "EvidenceRef",
+        "EvidenceRequest", "LifeCircleBrief", "MissingInformation", "PlanningIssue",
+        "PlanningPriority", "PlanningProposal", "PlanningRecommendation", "ReviewIssue",
+        "ReviewIssueCategory", "ReviewResult", "ReviewStatus", "RunStatus"
+    }
+    assert expected <= set(schemas.__all__)
+    assert all(hasattr(schemas, name) for name in expected)

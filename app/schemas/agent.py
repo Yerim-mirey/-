@@ -245,3 +245,104 @@ class ReviewResult(ContractModel):
         if self.status is ReviewStatus.INSUFFICIENT_EVIDENCE and not self.missing_evidence:
             raise ValueError("insufficient_evidence 必须包含结构化 EvidenceRequest。")
         return self
+
+
+class RunStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    WAITING_FOR_INPUT = "waiting_for_input"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class CompletionMode(str, Enum):
+    NORMAL = "normal"
+    WITH_LIMITATIONS = "with_limitations"
+
+
+class AgentRunState(ContractModel):
+    schema_version: AgentSchemaVersion
+    run_id: str = Field(pattern=r"^run:[a-z0-9][a-z0-9._-]*$")
+    status: RunStatus = Field(strict=False)
+    completion_mode: Annotated[CompletionMode, Field(strict=False)] | None = None
+    user_message: NonEmptyText
+    brief: LifeCircleBrief | None = None
+    evidence: EvidenceBundle | None = None
+    planning_proposal: PlanningProposal | None = None
+    review_result: ReviewResult | None = None
+    planning_round: int = Field(default=0, ge=0)
+    tool_retry_count: int = Field(default=0, ge=0)
+    warnings: list[WarningItem] = Field(default_factory=list)
+    errors: list[ErrorDetail] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def state_is_reachable(self) -> "AgentRunState":
+        outputs = (self.brief, self.evidence, self.planning_proposal, self.review_result)
+        if self.status is RunStatus.PENDING and (
+            any(item is not None for item in outputs)
+            or self.planning_round != 0
+            or self.tool_retry_count != 0
+            or self.completion_mode is not None
+            or self.warnings
+            or self.errors
+        ):
+            raise ValueError("pending Run 必须保持初始化状态。")
+        if self.status is RunStatus.FAILED and not self.errors:
+            raise ValueError("failed Run 必须包含 error。")
+        if self.status is not RunStatus.FAILED and self.errors:
+            raise ValueError("非 failed Run 不能包含 error。")
+        if self.status is RunStatus.WAITING_FOR_INPUT and (
+            self.brief is None
+            or not self.brief.missing_information
+            or any(item is not None for item in (self.evidence, self.planning_proposal, self.review_result))
+            or self.planning_round != 0
+            or self.tool_retry_count != 0
+        ):
+            raise ValueError("waiting_for_input 必须只包含带缺失信息的 Brief。")
+        if self.brief is not None and self.brief.missing_information and self.status not in {
+            RunStatus.WAITING_FOR_INPUT,
+            RunStatus.FAILED,
+        }:
+            raise ValueError("存在 missing_information 时 Run 必须等待用户输入。")
+        if self.status is RunStatus.COMPLETED and self.completion_mode is None:
+            raise ValueError("completed Run 必须声明 completion_mode。")
+        if self.status is not RunStatus.COMPLETED and self.completion_mode is not None:
+            raise ValueError("只有 completed Run 可以声明 completion_mode。")
+        if self.evidence is not None and self.brief is None:
+            raise ValueError("Evidence 必须依赖 Brief。")
+        if self.evidence is not None and self.brief.missing_information:
+            raise ValueError("缺少必要用户信息时不能获取 Evidence。")
+        if self.planning_proposal is not None and (self.brief is None or self.evidence is None):
+            raise ValueError("PlanningProposal 必须依赖 Brief 和 Evidence。")
+        if self.review_result is not None and self.planning_proposal is None:
+            raise ValueError("ReviewResult 必须依赖 PlanningProposal。")
+        if self.planning_proposal is not None and (
+            not self.brief.needs_planning
+            or self.planning_proposal.planning_round != self.planning_round
+            or self.planning_proposal.evidence_bundle_id != self.evidence.bundle_id
+        ):
+            raise ValueError("PlanningProposal 与 Brief、round 或 Evidence 不一致。")
+        if self.review_result is not None and (
+            self.review_result.reviewed_proposal_id != self.planning_proposal.proposal_id
+            or self.review_result.reviewed_planning_round != self.planning_round
+            or self.review_result.reviewed_evidence_bundle_id != self.evidence.bundle_id
+        ):
+            raise ValueError("ReviewResult 必须绑定当前 Proposal、round 和 Evidence。")
+        if self.brief is not None and not self.brief.needs_planning and (
+            self.planning_round != 0 or self.planning_proposal is not None or self.review_result is not None
+        ):
+            raise ValueError("非规划任务不能携带规划或审查状态。")
+        if self.status is RunStatus.COMPLETED:
+            if self.brief is None or self.evidence is None:
+                raise ValueError("completed Run 必须包含 Brief 和 Evidence。")
+            if self.brief.needs_planning:
+                if self.planning_proposal is None or self.review_result is None:
+                    raise ValueError("规划任务完成前必须生成 Proposal 和 Review。")
+                approved = self.review_result.status is ReviewStatus.APPROVED
+                if (self.completion_mode is CompletionMode.NORMAL) != approved:
+                    raise ValueError("normal 完成要求 approved；未通过只能带限制完成。")
+            elif self.completion_mode is not CompletionMode.NORMAL:
+                raise ValueError("非规划任务只能 normal 完成。")
+        if len({(item.code, item.message) for item in self.warnings}) != len(self.warnings):
+            raise ValueError("Run warnings 必须去重。")
+        return self

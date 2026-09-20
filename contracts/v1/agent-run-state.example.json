@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "run_id": "run:20260920-0001",
+  "status": "pending",
+  "completion_mode": null,
+  "user_message": "请体检四川北路街道并提出规划建议",
+  "brief": null,
+  "evidence": null,
+  "planning_proposal": null,
+  "review_result": null,
+  "planning_round": 0,
+  "tool_retry_count": 0,
+  "warnings": [],
+  "errors": []
+}
