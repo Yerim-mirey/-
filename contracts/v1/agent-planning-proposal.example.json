@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "proposal_id": "proposal:market-gap-r1",
+  "planning_round": 1,
+  "evidence_bundle_id": "evidence:diagnosis-example",
+  "summary": "社区基础服务存在需要优先核查的空间短板。",
+  "issues": [{
+    "issue_id": "issue:market-gap",
+    "title": "菜市场服务存在空间缺口",
+    "description": "现有证据显示部分分析区域未被菜市场服务覆盖。",
+    "priority": "high",
+    "facility_type": "market",
+    "evidence_refs": ["diagnosis:market-coverage"]
+  }],
+  "recommendations": [{
+    "recommendation_id": "recommendation:market-study",
+    "title": "优先开展菜市场补点可行性研究",
+    "rationale": "该方向直接对应已识别的菜市场覆盖问题。",
+    "priority": "high",
+    "actions": ["在已识别服务缺口内筛选候选点位", "补充用地和人口数据后再开展情景模拟"],
+    "evidence_refs": ["diagnosis:market-coverage"],
+    "limitations": ["当前结果不代表候选点位已具备建设条件"]
+  }],
+  "limitations": ["建议仅基于当前 Tool 结果，不包含新增设施后的确定性模拟"]
+}

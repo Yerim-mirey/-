@@ -130,3 +130,118 @@ class EvidenceBundle(ContractModel):
         if len({(item.code, item.message) for item in self.warnings}) != len(self.warnings):
             raise ValueError("EvidenceBundle warnings 必须去重。")
         return self
+
+
+class PlanningPriority(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class PlanningIssue(ContractModel):
+    issue_id: str = Field(pattern=r"^issue:[a-z0-9][a-z0-9._-]*$")
+    title: NonEmptyText
+    description: NonEmptyText
+    priority: PlanningPriority = Field(strict=False)
+    facility_type: Facility | None = None
+    evidence_refs: list[NonEmptyText] = Field(min_length=1)
+
+
+class PlanningRecommendation(ContractModel):
+    recommendation_id: str = Field(pattern=r"^recommendation:[a-z0-9][a-z0-9._-]*$")
+    title: NonEmptyText
+    rationale: NonEmptyText
+    priority: PlanningPriority = Field(strict=False)
+    actions: list[NonEmptyText] = Field(min_length=1)
+    evidence_refs: list[NonEmptyText] = Field(min_length=1)
+    limitations: list[NonEmptyText] = Field(default_factory=list)
+
+
+class PlanningProposal(ContractModel):
+    schema_version: AgentSchemaVersion
+    proposal_id: str = Field(pattern=r"^proposal:[a-z0-9][a-z0-9._-]*$")
+    planning_round: int = Field(ge=1)
+    evidence_bundle_id: str = Field(pattern=r"^evidence:[a-z0-9][a-z0-9._-]*$")
+    summary: NonEmptyText
+    issues: list[PlanningIssue] = Field(min_length=1)
+    recommendations: list[PlanningRecommendation] = Field(min_length=1)
+    limitations: list[NonEmptyText] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def identifiers_and_refs_are_unique(self) -> "PlanningProposal":
+        if len({item.issue_id for item in self.issues}) != len(self.issues):
+            raise ValueError("issue_id 不能重复。")
+        if len({item.recommendation_id for item in self.recommendations}) != len(self.recommendations):
+            raise ValueError("recommendation_id 不能重复。")
+        for item in [*self.issues, *self.recommendations]:
+            if len(set(item.evidence_refs)) != len(item.evidence_refs):
+                raise ValueError("单个规划项的 evidence_refs 不能重复。")
+        return self
+
+
+class EvidenceRequest(ContractModel):
+    request_id: str = Field(pattern=r"^request:[a-z0-9][a-z0-9._-]*$")
+    kind: Literal["diagnosis"]
+    reason: NonEmptyText
+    required_json_pointers: list[NonEmptyText] = Field(min_length=1)
+    facility_types: list[Facility] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def requested_paths_match_kind(self) -> "EvidenceRequest":
+        if len(set(self.required_json_pointers)) != len(self.required_json_pointers):
+            raise ValueError("required_json_pointers 不能重复。")
+        if len(set(self.facility_types)) != len(self.facility_types):
+            raise ValueError("EvidenceRequest facility_types 不能重复。")
+        if any(not pointer.startswith("/diagnosis/") for pointer in self.required_json_pointers):
+            raise ValueError("Agent v1 补证据只能请求 Diagnosis JSON Pointer。")
+        return self
+
+
+class ReviewStatus(str, Enum):
+    APPROVED = "approved"
+    REVISION_REQUIRED = "revision_required"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class ReviewIssueCategory(str, Enum):
+    UNSUPPORTED_FACT = "unsupported_fact"
+    NUMERIC_MISMATCH = "numeric_mismatch"
+    OVERREACH = "overreach"
+    WARNING_IGNORED = "warning_ignored"
+    ABSENCE_OVERSTATED = "absence_overstated"
+    PROBLEM_MISMATCH = "problem_mismatch"
+
+
+class ReviewIssue(ContractModel):
+    issue_id: str = Field(pattern=r"^review:[a-z0-9][a-z0-9._-]*$")
+    category: ReviewIssueCategory = Field(strict=False)
+    message: NonEmptyText
+    recommendation_ids: list[NonEmptyText] = Field(default_factory=list)
+    evidence_refs: list[NonEmptyText] = Field(default_factory=list)
+
+
+class ReviewResult(ContractModel):
+    schema_version: AgentSchemaVersion
+    status: ReviewStatus = Field(strict=False)
+    reviewed_proposal_id: str = Field(pattern=r"^proposal:[a-z0-9][a-z0-9._-]*$")
+    reviewed_planning_round: int = Field(ge=1)
+    reviewed_evidence_bundle_id: str = Field(pattern=r"^evidence:[a-z0-9][a-z0-9._-]*$")
+    issues: list[ReviewIssue]
+    revision_instructions: list[NonEmptyText]
+    missing_evidence: list[EvidenceRequest]
+
+    @model_validator(mode="after")
+    def status_matches_payload(self) -> "ReviewResult":
+        if len({item.issue_id for item in self.issues}) != len(self.issues):
+            raise ValueError("Review issue_id 不能重复。")
+        if len({item.request_id for item in self.missing_evidence}) != len(self.missing_evidence):
+            raise ValueError("EvidenceRequest request_id 不能重复。")
+        if self.status is ReviewStatus.APPROVED and (self.issues or self.revision_instructions or self.missing_evidence):
+            raise ValueError("approved 不能携带问题、修改要求或缺失证据。")
+        if self.status is ReviewStatus.REVISION_REQUIRED and not (self.issues or self.revision_instructions):
+            raise ValueError("revision_required 必须说明问题或修改要求。")
+        if self.status is ReviewStatus.REVISION_REQUIRED and self.missing_evidence:
+            raise ValueError("需要补证据时应使用 insufficient_evidence。")
+        if self.status is ReviewStatus.INSUFFICIENT_EVIDENCE and not self.missing_evidence:
+            raise ValueError("insufficient_evidence 必须包含结构化 EvidenceRequest。")
+        return self

@@ -107,3 +107,108 @@ def test_assignment_validation_is_inherited():
     brief = LifeCircleBrief.model_validate(load("agent-brief.example.json"))
     with pytest.raises(ValidationError):
         brief.user_goal = ""
+
+
+def diagnosis_evidence_payload() -> dict:
+    return {
+        "schema_version": "1.0",
+        "bundle_id": "evidence:diagnosis-example",
+        "refs": [{
+            "evidence_id": "diagnosis:market-coverage",
+            "kind": "diagnosis",
+            "json_pointer": "/diagnosis/data/metrics/0/blind_ratio",
+            "summary": "菜市场覆盖比例来自 Diagnosis 指标"
+        }],
+        "location": None,
+        "poi": None,
+        "routing": None,
+        "isochrone": None,
+        "blindspot": None,
+        "diagnosis": load("diagnosis-result.example.json"),
+        "warnings": []
+    }
+
+
+def test_planning_and_evidence_examples_form_a_closed_fixture():
+    from app.schemas.agent import PlanningProposal
+
+    evidence = EvidenceBundle.model_validate(diagnosis_evidence_payload())
+    proposal = PlanningProposal.model_validate(load("agent-planning-proposal.example.json"))
+    assert proposal.evidence_bundle_id == evidence.bundle_id
+    refs = {ref for item in proposal.issues + proposal.recommendations for ref in item.evidence_refs}
+    assert refs <= {ref.evidence_id for ref in evidence.refs}
+
+
+def test_issue_and_recommendation_require_unique_evidence_refs():
+    from app.schemas.agent import PlanningProposal
+
+    payload = load("agent-planning-proposal.example.json")
+    payload["issues"][0]["evidence_refs"] = []
+    with pytest.raises(ValidationError):
+        PlanningProposal.model_validate(payload)
+    payload = load("agent-planning-proposal.example.json")
+    payload["recommendations"][0]["evidence_refs"] *= 2
+    with pytest.raises(ValidationError):
+        PlanningProposal.model_validate(payload)
+
+
+def test_planning_ids_are_unique():
+    from app.schemas.agent import PlanningProposal
+
+    payload = load("agent-planning-proposal.example.json")
+    payload["recommendations"].append(payload["recommendations"][0])
+    with pytest.raises(ValidationError):
+        PlanningProposal.model_validate(payload)
+
+
+def test_approved_review_example_validates():
+    from app.schemas.agent import ReviewResult
+
+    review = ReviewResult.model_validate(load("agent-review-result.example.json"))
+    assert review.status.value == "approved"
+
+
+def test_revision_requires_issue_or_instruction_and_no_evidence_request():
+    from app.schemas.agent import ReviewResult
+
+    payload = load("agent-review-result.example.json")
+    payload["status"] = "revision_required"
+    with pytest.raises(ValidationError):
+        ReviewResult.model_validate(payload)
+    payload["revision_instructions"] = ["收窄建议范围"]
+    payload["missing_evidence"] = [{
+        "request_id": "request:diagnosis-refresh",
+        "kind": "diagnosis",
+        "reason": "需要新的诊断结果",
+        "required_json_pointers": ["/diagnosis/data/metrics"],
+        "facility_types": ["market"]
+    }]
+    with pytest.raises(ValidationError):
+        ReviewResult.model_validate(payload)
+
+
+def test_insufficient_evidence_requires_structured_request():
+    from app.schemas.agent import ReviewResult
+
+    payload = load("agent-review-result.example.json")
+    payload["status"] = "insufficient_evidence"
+    with pytest.raises(ValidationError):
+        ReviewResult.model_validate(payload)
+    payload["missing_evidence"] = [{
+        "request_id": "request:routing-refresh",
+        "kind": "routing",
+        "reason": "需要新的路径结果",
+        "required_json_pointers": ["/routing/data/routes"],
+        "facility_types": ["market"]
+    }]
+    with pytest.raises(ValidationError):
+        ReviewResult.model_validate(payload)
+    payload["missing_evidence"] = [{
+        "request_id": "request:diagnosis-refresh",
+        "kind": "diagnosis",
+        "reason": "需要新的诊断结果",
+        "required_json_pointers": ["/location/data/center"],
+        "facility_types": ["market"]
+    }]
+    with pytest.raises(ValidationError):
+        ReviewResult.model_validate(payload)
