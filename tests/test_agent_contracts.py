@@ -291,6 +291,92 @@ def test_failed_run_requires_error_and_pending_requires_zero_counters():
         AgentRunState.model_validate(pending)
 
 
+def test_failed_run_rejects_duplicate_errors():
+    from app.schemas.agent import AgentRunState
+
+    payload = load("agent-run-state.example.json")
+    payload.update({
+        "status": "failed",
+        "errors": [{"code": "E", "message": "boom", "retryable": False}] * 2,
+    })
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("review_status", "review_overrides"),
+    [
+        ("revision_required", {"revision_instructions": ["收窄建议范围"]}),
+        (
+            "insufficient_evidence",
+            {
+                "missing_evidence": [{
+                    "request_id": "request:diagnosis-refresh",
+                    "kind": "diagnosis",
+                    "reason": "需要新的诊断结果",
+                    "required_json_pointers": ["/diagnosis/data/metrics"],
+                    "facility_types": ["market"],
+                }]
+            },
+        ),
+    ],
+)
+def test_non_approved_planning_run_can_complete_with_limitations(review_status, review_overrides):
+    from app.schemas.agent import AgentRunState, CompletionMode
+
+    payload = completed_state_payload()
+    payload["completion_mode"] = "with_limitations"
+    payload["review_result"]["status"] = review_status
+    payload["review_result"].update(review_overrides)
+    state = AgentRunState.model_validate(payload)
+    assert state.completion_mode is CompletionMode.WITH_LIMITATIONS
+
+
+def non_planning_completed_state_payload() -> dict:
+    payload = load("agent-run-state.example.json")
+    brief = load("agent-brief.example.json")
+    brief.update({
+        "intent": "community_diagnosis",
+        "needs_planning": False,
+        "needs_review": False,
+    })
+    payload.update({
+        "status": "completed",
+        "completion_mode": "normal",
+        "brief": brief,
+        "evidence": diagnosis_evidence_payload(),
+    })
+    return payload
+
+
+def test_non_planning_run_can_complete_normally():
+    from app.schemas.agent import AgentRunState, CompletionMode
+
+    state = AgentRunState.model_validate(non_planning_completed_state_payload())
+    assert state.completion_mode is CompletionMode.NORMAL
+
+
+def test_non_planning_run_rejects_with_limitations_completion():
+    from app.schemas.agent import AgentRunState
+
+    payload = non_planning_completed_state_payload()
+    payload["completion_mode"] = "with_limitations"
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(payload)
+
+
+def test_run_rejects_duplicate_warnings():
+    from app.schemas.agent import AgentRunState
+
+    payload = load("agent-run-state.example.json")
+    payload.update({
+        "status": "running",
+        "warnings": [{"code": "W", "message": "degraded"}] * 2,
+    })
+    with pytest.raises(ValidationError):
+        AgentRunState.model_validate(payload)
+
+
 def test_all_agent_contracts_are_publicly_exported():
     import app.schemas as schemas
 

@@ -343,6 +343,8 @@ class AgentRunState(ContractModel):
                     raise ValueError("normal 完成要求 approved；未通过只能带限制完成。")
             elif self.completion_mode is not CompletionMode.NORMAL:
                 raise ValueError("非规划任务只能 normal 完成。")
+        if len({(item.code, item.message, item.retryable) for item in self.errors}) != len(self.errors):
+            raise ValueError("Run errors 必须去重。")
         if len({(item.code, item.message) for item in self.warnings}) != len(self.warnings):
             raise ValueError("Run warnings 必须去重。")
         return self
