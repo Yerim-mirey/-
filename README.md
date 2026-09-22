@@ -59,9 +59,21 @@ failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
 
 Runner 先解析地点，再按任务类型取证：完整体检只调用 `diagnose_community()`（`EvidenceBundle` 不允许 Diagnosis 与低层结果并存），普通查询调用 `resolve_location` 与 `search_pois`。证据引用由 Runner 依据实际 Tool 结果生成。Tool 失败时 `retryable=false` 立即失败，`retryable=true` 且预算未耗尽时消耗一次重试并重取；预算耗尽或出现未配置的 Mock 场景则以 `failed` 终止，不留半成品证据。`revision_required` 推进规划轮次并清除被消费的 Proposal/Review；`insufficient_evidence` 在预算允许时重新取证（更换 Evidence 会清除旧 Proposal/Review），预算不足或达到 3 轮上限时以 `with_limitations` 完成并写入 warning。
 
-本阶段仍不接真实模型、真实百度链路、API 入口或持久化；完整 Mock E2E 属于 Phase 8。测试使用受控模型输出与既有 Mock Gateway，覆盖节点与转移、等待输入、重试成功与耗尽、非重试失败、规划轮次上限及补证据回路（`tests/test_agent_graph.py`、`tests/test_agent_runner.py`）。
+本阶段不接真实模型、真实百度链路、API 入口或持久化。测试使用受控模型输出与既有 Mock Gateway，覆盖节点与转移、等待输入、重试成功与耗尽、非重试失败、规划轮次上限及补证据回路（`tests/test_agent_graph.py`、`tests/test_agent_runner.py`）。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断，以及可运行的 Graph 与 Runner；Mock E2E 与真实链路仍待后续阶段。详见 `docs/architecture/core-mvp.md`。
+### Agent v1 Phase 8：Mock E2E
+
+`tests/e2e/` 用受控 `StructuredLLM` + Mock Tool 交换 + 真实 `run_agent` 跑完整场景矩阵，从一条用户消息一直到 `AgentRunState` 终态，并逐场景核对状态链：Evidence 的 `bundle_id`、每条 `EvidenceRef.json_pointer` 都能在证据包中解析、Proposal/Review 的身份与轮次一致、warnings/errors 保留、补证据或返工后被消费的旧结果不再有效。安装依赖后运行：
+
+```bash
+env -u BAIDU_MAP_AK -u RUN_BAIDU_SMOKE python -m pytest tests/e2e -q
+```
+
+矩阵覆盖：缺地点或设施类别（零 Tool 调用）、普通设施查询、`0`（确认没有）与 `null`（未知，必须带 `PARTIAL_POI_RESULTS`）分开断言、完整体检、规划被批准、审查要求修改（第二轮新轮次且旧审查被清除）、审查要求补证据（换 Evidence、清旧 Proposal/Review、预算耗尽带限制完成）、Tool 可重试失败后成功、不可重试/重试耗尽/未配置 Mock 一律 `failed` 且不留半成品证据。
+
+本阶段同时修复了 Phase 7 的取证缺口：**可达性提问**需要 Routing 事实，Runner 现在以解析中心为起点调用 `calculate_walking_times`（没有可路由设施时不发请求，改为写入 `NO_ROUTING_TARGET` warning）；**盲区提问**不能由 POI 计数支撑，`LifeCircleBrief` 现在要求它走完整体检，由 Diagnosis 的等时圈与盲区覆盖回答。`completed` 只表示流程走完，不等于用户的问题已被证据回答。
+
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、可运行的 Graph 与 Runner，以及离线端到端场景矩阵；真实 MVP Gateway（Phase 9）与真实模型/百度链路（Phase 10）仍待后续阶段。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
