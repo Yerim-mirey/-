@@ -1,6 +1,6 @@
 # 15 分钟生活圈助手 — Core Tool 基线
 
-本仓库以 Tool 1–6 的现有 Contract/Schema 和实现作为后续 API、Web 的唯一核心基线。六个 Tool 已有离线测试；完整真实百度端到端验收因步行路由限流尚未通过，不能据此宣称整个 MVP 已完成。
+本仓库以 Tool 1–6 的现有 Contract/Schema 和实现作为后续 API、Web 的唯一核心基线。六个 Tool 已有离线测试；队友在 2026-09-22 按当时百度控制台的 3 QPS 上限完成一次真实端到端验收，记录见 `docs/test-report/tool1-6-formal-acceptance-2026-09-22.md`，旧的限流失败记录保留作历史。正式 Service 尚无跨请求共享限速，API 接手要求见 `API_交接说明_2026-09-22.md`。
 
 ## 当前内容
 
@@ -33,7 +33,7 @@ partial_gateway = MockToolGateway(load_contract_exchanges("partial"))
 failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
 ```
 
-接入更新版 Tool 1–6 时，让真实适配器实现同一接口，并运行 `tests/test_mock_tool_gateway.py` 中可复用的 Gateway 契约检查；无法准确映射到 v1 的语义变化需显式升级契约。Phase 2 只验证模拟交换，不代表真实百度链路验收。
+Phase 9 的 `MVPToolGateway` 实现同一接口，复用 `tests/test_mock_tool_gateway.py` 中的 Gateway 契约检查；无法准确映射到 v1 的语义变化需显式升级契约。Phase 2 的模拟交换本身不代表真实百度链路验收。
 
 ### Agent v1 Phase 3：Orchestrator Agent
 
@@ -73,28 +73,36 @@ env -u BAIDU_MAP_AK -u RUN_BAIDU_SMOKE python -m pytest tests/e2e -q
 
 本阶段同时修复了 Phase 7 的取证缺口：**可达性提问**需要 Routing 事实，Runner 现在以解析中心为起点调用 `calculate_walking_times`（没有可路由设施时不发请求，改为写入 `NO_ROUTING_TARGET` warning）；**盲区提问**不能由 POI 计数支撑，`LifeCircleBrief` 现在要求它走完整体检，由 Diagnosis 的等时圈与盲区覆盖回答。`completed` 只表示流程走完，不等于用户的问题已被证据回答。
 
+### Agent v1 Phase 9：MVP Tool Gateway
+
+`app/agent_tools/mvp_gateway.py` 把现有六个 `ToolGateway` 方法直接映射到 Core Service：Location、POI、Routing、Isochrone、Blindspot 和 Diagnosis。构造时复用一组 Provider/Service，完整体检仍由 Tool 6 `diagnose` 编排；Agent、Graph 与 Runner 不改写。`MVPToolGateway.from_baidu_ak(ak)` 只构造 Provider，真正调用方法才可能联网。Phase 9 测试注入假 Provider、封锁 socket，并用同一个 `run_agent` 验证只替换 Gateway 的流程。
+
+该阶段的验证完全离线。队友的 2026-09-22 真实 Tool 验收使用临时节流器；正式 API/Service 仍缺按 AK 共享的批量算路限速与长任务保护，在补齐之前不要用这个 Gateway 并发运行真实完整诊断。Phase 9 记录见 `docs/test-report/phase9-mvp-tool-gateway-2026-09-22.md`。
+
+`docs/项目进度交接_截至Phase8及Phase10准备_2026-09-22.md` 等较早文档是当时的进度快照；其中“Phase 9 未开始”已由本节和 Phase 9 报告更新。
+
 ### Agent v1 Phase 10 准备：DeepSeek 模型适配器
 
-`app/providers/deepseek.py` 的 `DeepSeekLLM` 实现 `StructuredLLM` 协议，三个 Agent 可直接注入，无需改写。DeepSeek 的 JSON Output 模式不接收 JSON Schema，因此适配器把 `response_schema` 渲染进系统提示词（满足其"提示词必须含 json 字样并给出格式示例"的要求），返回对象仍由各 Agent 的 Pydantic 模型校验。`max_tokens` 默认为 4096 以避免截断；官方说明 JSON 模式偶尔返回空内容，这种情况与非法 JSON、HTTP 错误、网络失败分别抛出 `LLMResponseError` 与 `LLMTransportError`，由 Runner 转成 `failed` Run，不会伪装成成功。
+`app/providers/deepseek.py` 的 `DeepSeekLLM` 实现 `StructuredLLM` 协议，三个 Agent 可直接注入，无需改写。DeepSeek 的 JSON Output 模式不接收 JSON Schema，因此适配器把 `response_schema` 渲染进系统提示词，返回对象仍由各 Agent 的 Pydantic 模型校验。`max_tokens` 默认为 8192；空内容、非法 JSON、HTTP 错误、网络失败会产生明确异常，由 Runner 转成 `failed` Run，不会伪装成成功。
 
 模型默认 `deepseek-flash`，可用 `DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_API_KEY` 覆盖。密钥只放在本机未入 Git 的 `.env`：
 
 ```bash
 set -a; source .env; set +a
-RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_llm_live.py
+RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_llm_live
 ```
 
 该脚本每轮恰好发出 3 次请求（每个角色一次），只打印公开摘要，不含密钥、原始提示词或完整模型输出。可用 `RUN_DEEPSEEK_SMOKE_ROUNDS`（上限 5）跑多轮以观察稳定性。它验证的是**输出符合公共 Schema 与确定性引用校验**，不是回答质量；真实语义质量评测属于 Phase 10。
 
 思考模式默认关闭：DeepSeek 的 reasoning tokens 计入 `max_tokens`，结构化抽取的输出很小，开启思考会把预算耗尽并导致 JSON 截断（首次真实调用即遇到）。需要时可用 `thinking=True` 或 `DEEPSEEK_THINKING=1` 开启；命中 `max_tokens` 会抛 `LLMOutputTruncated`，与格式错误明确区分。真实调用观测见 `docs/test-report/phase10-prep-deepseek-adapter-2026-09-22.md`。默认测试完全离线：`tests/test_deepseek_provider.py` 用注入的 `httpx.MockTransport` 断言请求载荷与全部失败分支，真实调用被 `RUN_DEEPSEEK_SMOKE=1` 与 `DEEPSEEK_API_KEY` 双重门控。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、可运行的 Graph 与 Runner，以及离线端到端场景矩阵；真实 MVP Gateway（Phase 9）与真实模型/百度链路（Phase 10）仍待后续阶段。详见 `docs/architecture/core-mvp.md`。
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景，以及 Phase 9 的真实 Core Service 适配器离线验证；真实模型与真实 Gateway 的完整 Agent 链路属于 Phase 10。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
 1. `app/schemas/common.py` 是公共 `CenterPoint`、`WarningItem`、`ErrorDetail`、`Meta` 的唯一来源。API 和 Web 复用现有 Tool/Schema，不另造数据结构。
 2. 原有 `demo/map-demo.template.html` 与 `LICENSE` 保留；正式 Web 尚未开发。
-3. 真实百度 AK 只放在本机 `.env`，不提交 Git；仓库只包含 `.env.example`。步行路由目前出现限流，请勿反复运行真实 API 脚本。
+3. 真实百度 AK 只放在本机 `.env`，不提交 Git；仓库只包含 `.env.example`。正式验收的 3 QPS 节奏尚未进入 API/Service，完成共享限速前不要并发运行真实完整诊断。
 
 本地测试（先安装 `requirements.txt`）：
 
@@ -122,6 +130,6 @@ Tool 3/4 来源为 `core-mvp-tools-v1.zip`（SHA-256：`c9028fe8ca6e2ac1782327a4
 
 Tool 5/6 的 Contract/Schema 和 Service 完成后，接口校验通过；离线测试 `184 passed, 3 skipped`。Tool 5 已用保存的真实等时圈样本做离线空间处理测试；受控真实百度链路结果见 `docs/test-report/tool5-6-2026-09-19.md`。`scripts/verify_diagnosis_live.py` 默认不会发起百度请求，只有显式启用并配置 AK 才联网。
 
-三类设施、默认业务参数的正式端到端验收因百度步行路由限流而未通过；没有继续消耗配额，结果与重验条件见 `docs/test-report/tool1-6-formal-acceptance-2026-09-19.md`。
+三类设施、默认业务参数的正式端到端验收于 2026-09-22 通过，详见 `docs/test-report/tool1-6-formal-acceptance-2026-09-22.md`；2026-09-19 的限流失败记录继续保留。
 
 尚未补 Docker、CI 和正式 Web；这些内容按交接文档随开发逐步加入。

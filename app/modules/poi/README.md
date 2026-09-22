@@ -17,8 +17,10 @@ fails, it returns the contract's failure envelope. A successful empty search
 returns a count of `0`; categories omitted from the request remain `null`
 because they were not searched.
 
-This module contains no real Baidu HTTP client or credentials. Real-provider
-verification is still required before calling the POI tool complete.
+The real Baidu HTTP adapter lives in `app/providers/baidu/poi.py`; credentials
+are read only from the server environment. The provider and the complete
+Tool 1–6 chain have been verified against real Baidu data; see the
+2026-09-22 acceptance report in `docs/test-report/`.
 
 To run the live check, put the server-side AK in the ignored project-root
 `.env` as `BAIDU_MAP_AK=...`, then run `python scripts/verify_poi_live.py`.
