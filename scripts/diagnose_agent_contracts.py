@@ -100,18 +100,38 @@ ORCHESTRATOR_MESSAGES = (
 )
 
 
-def proposal_for(evidence: EvidenceBundle) -> PlanningProposal:
-    """A proposal bound to `evidence`, citing only ids that bundle provides."""
+def proposal_for(evidence: EvidenceBundle, *, mismatch: bool = False) -> PlanningProposal:
+    """A proposal bound to `evidence`, citing only ids that bundle provides.
+
+    With ``mismatch=False`` each item cites the evidence for its own facility,
+    which is a coherent proposal and the fair input for judging the Reviewer.
+    With ``mismatch=True`` a recommendation is deliberately pointed at another
+    facility's evidence, which a Reviewer must catch; feeding only that variant
+    would say nothing about review quality.
+    """
     from scripts.verify_agent_llm_live import smoke_proposal
 
     payload = smoke_proposal().model_dump(mode="json")
     payload["evidence_bundle_id"] = evidence.bundle_id
-    available = sorted(ref.evidence_id for ref in evidence.refs)
-    for index, item in enumerate([*payload["issues"], *payload["recommendations"]]):
-        item["evidence_refs"] = [available[index % len(available)]]
     metrics = [metric.facility_type.value for metric in evidence.diagnosis.root.data.metrics]
-    for issue, facility in zip(payload["issues"], metrics):
-        issue["facility_type"] = facility
+    ref_for = {facility: f"diagnosis:facility-{facility}" for facility in metrics}
+    available = set(ref_for.values())
+    default_ref = sorted(available)[0]
+
+    for item in payload["issues"]:
+        facility = item.get("facility_type") or metrics[0]
+        item["evidence_refs"] = [ref_for.get(facility, default_ref)]
+    for item in payload["recommendations"]:
+        # A recommendation carries no facility of its own, so ground it on the
+        # first facility metric rather than on whatever index it happens to be.
+        item["evidence_refs"] = [ref_for.get(metrics[0], default_ref)]
+
+    if mismatch and payload["recommendations"]:
+        other = next(
+            (ref for facility, ref in ref_for.items() if facility != metrics[0]),
+            default_ref,
+        )
+        payload["recommendations"][0]["evidence_refs"] = [other]
     return PlanningProposal.model_validate(payload)
 
 
@@ -144,6 +164,8 @@ class Attempt:
     review_status: str | None = None
     review_issue_count: int = 0
     missing_evidence_count: int = 0
+    proposal_is_grounded: bool | None = None
+    discriminates: bool | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -166,6 +188,8 @@ class Attempt:
             "review_status": self.review_status,
             "review_issue_count": self.review_issue_count,
             "missing_evidence_count": self.missing_evidence_count,
+            "proposal_is_grounded": self.proposal_is_grounded,
+            "discriminates": self.discriminates,
         }
 
 
@@ -244,9 +268,15 @@ def run_planning(
 
 
 def run_reviewer(
-    model: DeepSeekLLM, index: int, evidence: EvidenceBundle, proposal: PlanningProposal
+    model: DeepSeekLLM,
+    index: int,
+    evidence: EvidenceBundle,
+    proposal: PlanningProposal,
+    *,
+    expect_revision: bool,
 ) -> Attempt:
     attempt = Attempt(index=index, role="reviewer")
+    attempt.proposal_is_grounded = not expect_revision
     try:
         review = ReviewerAgent(model).review_proposal(evidence, proposal)
     except LLMError as exc:
@@ -260,6 +290,12 @@ def run_reviewer(
     attempt.review_status = review.status.value
     attempt.review_issue_count = len(review.issues)
     attempt.missing_evidence_count = len(review.missing_evidence)
+    # A grounded proposal should be approved; a mis-cited one should not be.
+    attempt.discriminates = (
+        review.status.value == "approved"
+        if attempt.proposal_is_grounded
+        else review.status.value != "approved"
+    )
     return attempt
 
 
@@ -271,7 +307,16 @@ def run_round(model: DeepSeekLLM, index: int, role: str, bundle: str) -> Attempt
     evidence = BUNDLES[bundle]()
     if role == "planning":
         return run_planning(model, index, evidence, smoke_brief())
-    return run_reviewer(model, index, evidence, proposal_for(evidence))
+    # Alternate grounded and mis-cited proposals so the Reviewer is measured on
+    # both accepting good work and catching a defect, not on one of the two.
+    mismatch = index % 2 == 0
+    return run_reviewer(
+        model,
+        index,
+        evidence,
+        proposal_for(evidence, mismatch=mismatch),
+        expect_revision=mismatch,
+    )
 
 
 # --- Reporting --------------------------------------------------------------
@@ -337,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
             "review_statuses": dict(
                 Counter(a.review_status for a in attempts if a.review_status is not None)
             ),
+            "discrimination": {
+                "measured": sum(1 for a in attempts if a.discriminates is not None),
+                "correct": sum(1 for a in attempts if a.discriminates is True),
+            },
         }
         print(f"--- {role}: ok={outcomes.get('ok', 0)}/{rounds} outcomes={dict(outcomes)}")
         if causes:

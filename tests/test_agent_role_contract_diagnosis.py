@@ -119,6 +119,37 @@ def test_proposal_for_cites_only_available_evidence():
     assert proposal.planning_round == 1
 
 
+def test_grounded_proposal_cites_matching_evidence_for_each_issue():
+    """Regression: an earlier fixture mis-cited the recommendation, which made
+    every Reviewer verdict `revision_required` and measured nothing."""
+    evidence = realistic_evidence()
+    proposal = proposal_for(evidence)
+
+    for issue in proposal.issues:
+        if issue.facility_type is None:
+            continue
+        assert issue.evidence_refs == [f"diagnosis:facility-{issue.facility_type.value}"]
+    for recommendation in proposal.recommendations:
+        assert recommendation.evidence_refs == ["diagnosis:facility-market"]
+
+
+def test_mismatch_variant_deliberately_mis_cites_one_recommendation():
+    proposal = proposal_for(realistic_evidence(), mismatch=True)
+
+    assert proposal.recommendations[0].evidence_refs == ["diagnosis:facility-pharmacy"]
+    # The issue stays grounded, so only the recommendation is defective.
+    assert proposal.issues[0].evidence_refs == ["diagnosis:facility-market"]
+
+
+def test_grounded_and_mismatch_variants_differ():
+    evidence = realistic_evidence()
+
+    grounded = proposal_for(evidence)
+    mismatched = proposal_for(evidence, mismatch=True)
+
+    assert grounded.recommendations[0].evidence_refs != mismatched.recommendations[0].evidence_refs
+
+
 def test_proposal_for_stays_valid_under_the_sparse_bundle():
     proposal = proposal_for(sparse_evidence())
 
@@ -290,13 +321,17 @@ def test_reviewer_records_status_and_issue_counts():
     payload["reviewed_evidence_bundle_id"] = evidence.bundle_id
     stub = StubLLM(payload)
 
-    attempt = run_reviewer(stub, 1, evidence, proposal_for(evidence))
+    attempt = run_reviewer(
+        stub, 1, evidence, proposal_for(evidence), expect_revision=False
+    )
 
     assert attempt.outcome == "ok"
     assert attempt.role == "reviewer"
     assert attempt.review_status == "approved"
     assert attempt.review_issue_count == 0
     assert attempt.missing_evidence_count == 0
+    assert attempt.proposal_is_grounded is True
+    assert attempt.discriminates is True
 
 
 def test_reviewer_revision_required_is_recorded_as_a_status_not_a_failure():
@@ -308,17 +343,24 @@ def test_reviewer_revision_required_is_recorded_as_a_status_not_a_failure():
     payload["reviewed_planning_round"] = 1
     payload["reviewed_evidence_bundle_id"] = evidence.bundle_id
     payload["revision_instructions"] = ["收窄建议范围"]
-    attempt = run_reviewer(StubLLM(payload), 1, evidence, proposal_for(evidence))
+    attempt = run_reviewer(
+        StubLLM(payload), 1, evidence, proposal_for(evidence, mismatch=True),
+        expect_revision=True,
+    )
 
     assert attempt.outcome == "ok"
     assert attempt.review_status == "revision_required"
+    assert attempt.proposal_is_grounded is False
+    assert attempt.discriminates is True
 
 
 def test_reviewer_mismatched_identity_is_a_contract_rejection():
     evidence = realistic_evidence()
     payload = example("agent-review-result.example.json")
     payload["reviewed_evidence_bundle_id"] = "evidence:some-other-bundle"
-    attempt = run_reviewer(StubLLM(payload), 1, evidence, proposal_for(evidence))
+    attempt = run_reviewer(
+        StubLLM(payload), 1, evidence, proposal_for(evidence), expect_revision=False
+    )
 
     assert attempt.outcome == "contract_rejected"
 
