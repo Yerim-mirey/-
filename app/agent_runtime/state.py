@@ -17,4 +17,18 @@ def update_run(state: AgentRunState, **changes: object) -> AgentRunState:
         raise ValueError("Run identity cannot change")
     payload = state.model_dump(mode="json")
     payload.update(changes)
-    return AgentRunState.model_validate(payload)
+    updated = AgentRunState.model_validate(payload)
+    for source, dependent in (
+        ("brief", "evidence"),
+        ("evidence", "planning_proposal"),
+        ("planning_proposal", "review_result"),
+    ):
+        if (
+            getattr(state, source) is not None
+            and getattr(updated, source) != getattr(state, source)
+            and getattr(updated, dependent) is not None
+        ):
+            raise ValueError(f"Changing {source} requires clearing {dependent}")
+    if state.brief is not None and updated.brief != state.brief and updated.planning_round != 0:
+        raise ValueError("Changing brief requires resetting planning_round")
+    return updated

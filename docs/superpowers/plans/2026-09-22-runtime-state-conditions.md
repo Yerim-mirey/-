@@ -24,7 +24,7 @@
 
 **Interfaces:** `new_run(run_id: str, user_message: str) -> AgentRunState`; `update_run(state: AgentRunState, **changes: object) -> AgentRunState`.
 
-- [x] Write tests for a pending new run, an atomic Brief/status update, rejection without mutating the original, immutable identity, and clearing stale Proposal/Review when Evidence changes.
+- [x] Write tests for a pending new run, an atomic Brief/status update, rejection without mutating the original, immutable identity, and clearing stale downstream results when Brief/Evidence/Proposal content changes even under the same ID.
 
 ```python
 pending = new_run("run:test", "体检社区")

@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent_runtime.state import new_run, update_run
-from app.schemas.agent import AgentRunState, EvidenceBundle, LifeCircleBrief
+from app.schemas.agent import AgentRunState, EvidenceBundle, LifeCircleBrief, PlanningProposal
 
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts" / "v1"
@@ -88,3 +88,49 @@ def test_new_evidence_requires_clearing_old_proposal_and_review_atomically():
     assert updated.planning_proposal is None
     assert updated.review_result is None
     assert updated.planning_round == 1
+
+
+def test_changed_evidence_with_same_id_requires_clearing_downstream_results():
+    state = reviewed_state()
+    replacement = state.evidence.model_dump(mode="json")
+    replacement["warnings"] = [{"code": "LOW_CONFIDENCE", "message": "新增数据质量警告"}]
+    evidence = EvidenceBundle.model_validate(replacement)
+
+    with pytest.raises(ValueError):
+        update_run(state, evidence=evidence)
+    updated = update_run(state, evidence=evidence, planning_proposal=None, review_result=None)
+
+    assert updated.evidence.warnings[0].code == "LOW_CONFIDENCE"
+    assert updated.planning_proposal is None
+    assert updated.review_result is None
+
+
+def test_changed_proposal_with_same_id_requires_clearing_old_review():
+    state = reviewed_state()
+    replacement = state.planning_proposal.model_dump(mode="json")
+    replacement["summary"] = "已修改的规划结论"
+    proposal = PlanningProposal.model_validate(replacement)
+
+    with pytest.raises(ValueError):
+        update_run(state, planning_proposal=proposal)
+    updated = update_run(state, planning_proposal=proposal, review_result=None)
+
+    assert updated.planning_proposal.summary == "已修改的规划结论"
+    assert updated.review_result is None
+
+
+def test_changed_brief_requires_clearing_evidence_and_resetting_round():
+    state = reviewed_state()
+    replacement = state.brief.model_dump(mode="json")
+    replacement["user_goal"] = "改为分析新社区"
+    brief = LifeCircleBrief.model_validate(replacement)
+
+    with pytest.raises(ValueError):
+        update_run(state, brief=brief)
+    updated = update_run(
+        state, brief=brief, evidence=None, planning_proposal=None, review_result=None, planning_round=0
+    )
+
+    assert updated.brief.user_goal == "改为分析新社区"
+    assert updated.evidence is None
+    assert updated.planning_round == 0

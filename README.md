@@ -51,7 +51,7 @@ failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
 
 ### Agent v1 Phase 6：Runtime State + Conditions
 
-`app/agent_runtime/state.py` 复用公共 `AgentRunState` 创建运行并原子更新状态；`conditions.py` 根据 Brief、Evidence 和 ReviewResult 确定下一步。规划最多 3 轮，Tool 最多重试 2 次；错误是否可重试由后续 Runner 判断。本阶段只提供状态与纯条件函数，不执行 Graph。
+`app/agent_runtime/state.py` 复用公共 `AgentRunState` 创建运行并原子更新状态；替换已有 Brief、Evidence 或 Proposal 时，即使 ID 不变，也必须清除下游旧结果。`conditions.py` 根据 Brief、Evidence 和 ReviewResult 确定下一步。规划最多 3 轮，Tool 最多重试 2 次；错误是否可重试由后续 Runner 判断。本阶段只提供状态与纯条件函数，不执行 Graph。
 
 项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为和 Runtime 状态判断；Graph 与 Runner 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
 
