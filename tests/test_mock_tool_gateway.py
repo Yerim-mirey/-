@@ -9,10 +9,10 @@ import pytest
 from app.agent_tools.gateway import ToolGateway
 from app.agent_tools.mock_gateway import MockExchange, MockScenarioError, MockToolGateway
 from app.agent_tools.mock_scenarios import load_contract_exchanges
-from app.schemas.blindspot import BlindspotRequest, BlindspotResult
-from app.schemas.diagnosis import DiagnosisRequest, DiagnosisResult
+from app.schemas.blindspot import BlindspotRequest, BlindspotResult, validate_blindspot_exchange
+from app.schemas.diagnosis import DiagnosisRequest, DiagnosisResult, validate_diagnosis_exchange
 from app.schemas.isochrone import IsochroneRequest, IsochroneResult
-from app.schemas.location import LocationRequest, LocationResult
+from app.schemas.location import CoordinateInput, LocationRequest, LocationResult, LocationSource
 from app.schemas.poi import POISearchRequest, POISearchResult
 from app.schemas.routing import RoutingRequest, RoutingResult
 
@@ -28,6 +28,38 @@ def assert_gateway_contract(gateway: ToolGateway, method: str, request, result_t
     result = getattr(gateway, method)(request)
     assert type(result) is result_type
     assert type(result).model_validate_json(result.model_dump_json()) == result
+    assert result.root.meta.schema_version == request.schema_version
+    if not result.root.ok:
+        return result
+    data = result.root.data
+    if method == "resolve_location":
+        if isinstance(request.input, CoordinateInput):
+            assert (data.center.lng, data.center.lat, data.center.crs) == (
+                request.input.lng, request.input.lat, request.input.crs
+            )
+            assert data.source is LocationSource.INPUT_COORDINATE
+        else:
+            assert data.source is LocationSource.BAIDU_GEOCODING
+    elif method == "search_pois":
+        assert data.center == request.center
+        assert {poi.facility_type for poi in data.pois} <= set(request.facility_types)
+    elif method == "calculate_walking_times":
+        assert data.origin == request.origin
+        assert data.travel_mode == request.travel_mode
+        assert {route.target_id: route.location for route in data.routes} == {
+            target.target_id: target.location for target in request.targets
+        }
+    elif method == "generate_isochrone":
+        assert data.center == request.center
+        assert data.time_limit_s == request.time_limit_s
+    elif method == "detect_blindspots":
+        validate_blindspot_exchange(request, result)
+    elif method == "diagnose_community":
+        validate_diagnosis_exchange(request, result)
+        if isinstance(request.location, CoordinateInput):
+            assert (data.center.lng, data.center.lat, data.center.crs) == (
+                request.location.lng, request.location.lat, request.location.crs
+            )
     return result
 
 
@@ -133,7 +165,10 @@ def test_mismatched_exchange_is_rejected(method, request_name, result_name, requ
 def test_mock_never_opens_network_connection(monkeypatch):
     def blocked(*args, **kwargs):
         raise AssertionError("network attempted")
+    monkeypatch.delenv("BAIDU_MAP_AK", raising=False)
+    monkeypatch.setenv("BAIDU_SMOKE_TEST", "0")
     monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket.socket, "connect", blocked)
     gateway = MockToolGateway()
     for method, request_type, prefix in [
         ("resolve_location", LocationRequest, "location"),
@@ -173,3 +208,54 @@ def test_coordinate_location_rejects_geocoding_source():
     result = LocationResult.model_validate(fixture("location-result.example.json"))
     with pytest.raises(ValueError, match="source"):
         MockToolGateway([MockExchange("resolve_location", request, result)])
+
+
+def test_diagnosis_rejects_result_from_another_coordinate():
+    request_data = fixture("diagnosis-request.example.json")
+    request_data["location"].update(lng=120.0)
+    request = DiagnosisRequest.model_validate(request_data)
+    result = DiagnosisResult.model_validate(fixture("diagnosis-result.example.json"))
+    with pytest.raises(ValueError, match="Diagnosis.*center"):
+        MockToolGateway([MockExchange("diagnose_community", request, result)])
+
+
+def test_address_location_rejects_coordinate_source():
+    request = LocationRequest.model_validate(fixture("location-request.example.json"))
+    result_data = fixture("location-result.example.json")
+    result_data["data"]["source"] = "input_coordinate"
+    result_data["meta"]["provider"] = None
+    result = LocationResult.model_validate(result_data)
+    with pytest.raises(ValueError, match="Address Location.*source"):
+        MockToolGateway([MockExchange("resolve_location", request, result)])
+
+
+def test_poi_unknown_count_requires_partial_warning():
+    request = POISearchRequest.model_validate(fixture("poi-search-request.example.json"))
+    result_data = fixture("poi-search-result.example.json")
+    result_data["data"]["counts"]["pharmacy"] = None
+    result = POISearchResult.model_validate(result_data)
+    with pytest.raises(ValueError, match="PARTIAL_POI_RESULTS"):
+        MockToolGateway([MockExchange("search_pois", request, result)])
+
+
+def test_poi_result_must_fit_requested_search_radius():
+    request_data = fixture("poi-search-request.example.json")
+    request_data["search_radius_m"] = 1
+    request = POISearchRequest.model_validate(request_data)
+    result = POISearchResult.model_validate(fixture("poi-search-result.example.json"))
+    with pytest.raises(ValueError, match="radius"):
+        MockToolGateway([MockExchange("search_pois", request, result)])
+
+
+def test_reusable_gateway_contract_rejects_wrong_poi_center():
+    request = POISearchRequest.model_validate(fixture("poi-search-request.example.json"))
+    payload = fixture("poi-search-result.example.json")
+    payload["data"]["center"].update(lng=120.0)
+    wrong_result = POISearchResult.model_validate(payload)
+
+    class WrongPOIGateway:
+        def search_pois(self, request):
+            return wrong_result
+
+    with pytest.raises(AssertionError):
+        assert_gateway_contract(WrongPOIGateway(), "search_pois", request, POISearchResult)

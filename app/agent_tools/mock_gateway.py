@@ -1,6 +1,7 @@
 """Deterministic, validated Tool exchanges for offline Agent development."""
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -9,7 +10,7 @@ from pydantic import BaseModel
 from app.schemas.blindspot import BlindspotRequest, BlindspotResult, validate_blindspot_exchange
 from app.schemas.diagnosis import DiagnosisRequest, DiagnosisResult, validate_diagnosis_exchange
 from app.schemas.isochrone import IsochroneRequest, IsochroneResult
-from app.schemas.location import CoordinateInput, LocationRequest, LocationResult, LocationSource
+from app.schemas.location import AddressInput, CoordinateInput, LocationRequest, LocationResult, LocationSource
 from app.schemas.poi import POISearchRequest, POISearchResult
 from app.schemas.routing import RoutingRequest, RoutingResult
 
@@ -45,6 +46,15 @@ def _canonical_request(request: BaseModel) -> str:
     return json.dumps(request.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _distance_m(first, second) -> float:
+    """Great-circle distance for the BD09LL point coordinates in v1 samples."""
+    first_lat, second_lat = math.radians(first.lat), math.radians(second.lat)
+    delta_lat = second_lat - first_lat
+    delta_lng = math.radians(second.lng - first.lng)
+    arc = math.sin(delta_lat / 2) ** 2 + math.cos(first_lat) * math.cos(second_lat) * math.sin(delta_lng / 2) ** 2
+    return 2 * 6_371_008.8 * math.asin(min(1.0, math.sqrt(arc)))
+
+
 def _validate_exchange(method: str, request: BaseModel, result: BaseModel) -> None:
     if method not in _METHOD_MODELS:
         raise ValueError(f"Unknown Mock Tool method: {method}")
@@ -70,18 +80,28 @@ def _validate_exchange(method: str, request: BaseModel, result: BaseModel) -> No
             data.source is not LocationSource.INPUT_COORDINATE or result.root.meta.provider is not None
         ):
             raise ValueError("Coordinate Location result source/provider differs from request")
+        if isinstance(request.input, AddressInput) and data.source is not LocationSource.BAIDU_GEOCODING:
+            raise ValueError("Address Location result source differs from request")
     elif method == "search_pois":
         if data.center != request.center:
             raise ValueError("POI result center differs from request")
         requested = set(request.facility_types)
         if any(poi.facility_type not in requested for poi in data.pois):
             raise ValueError("POI result contains an unrequested facility type")
-        for facility, count in data.counts.model_dump().items():
+        if any(_distance_m(request.center, poi.location) > request.search_radius_m for poi in data.pois):
+            raise ValueError("POI result contains a facility outside request radius")
+        requested_names = {item.value for item in requested}
+        counts = data.counts.model_dump()
+        for facility, count in counts.items():
             observed = sum(poi.facility_type.value == facility for poi in data.pois)
-            if (facility not in {item.value for item in requested} and count is not None) or (
+            if (facility not in requested_names and count is not None) or (
                 count is not None and count != observed
             ):
                 raise ValueError("POI counts differ from request or returned facilities")
+        if any(counts[name] is None for name in requested_names) and not any(
+            warning.code == "PARTIAL_POI_RESULTS" for warning in result.root.warnings
+        ):
+            raise ValueError("Unknown POI count requires PARTIAL_POI_RESULTS warning")
     elif method == "calculate_walking_times":
         targets = {target.target_id: target.location for target in request.targets}
         if data.origin != request.origin or data.travel_mode != request.travel_mode or len(data.routes) != len(targets):
@@ -91,6 +111,10 @@ def _validate_exchange(method: str, request: BaseModel, result: BaseModel) -> No
     elif method == "generate_isochrone":
         if data.center != request.center or data.time_limit_s != request.time_limit_s:
             raise ValueError("Isochrone result differs from request")
+    elif method == "diagnose_community" and isinstance(request.location, CoordinateInput):
+        location = request.location
+        if (data.center.lng, data.center.lat, data.center.crs) != (location.lng, location.lat, location.crs):
+            raise ValueError("Diagnosis result center differs from coordinate request")
 
 
 class MockToolGateway:
