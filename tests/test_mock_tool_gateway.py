@@ -1,6 +1,7 @@
 """Offline contract tests for the future Agent-to-Tool boundary."""
 
 import json
+import math
 import socket
 from pathlib import Path
 
@@ -43,6 +44,15 @@ def assert_gateway_contract(gateway: ToolGateway, method: str, request, result_t
     elif method == "search_pois":
         assert data.center == request.center
         assert {poi.facility_type for poi in data.pois} <= set(request.facility_types)
+        for poi in data.pois:
+            lat1, lat2 = math.radians(request.center.lat), math.radians(poi.location.lat)
+            delta_lat = lat2 - lat1
+            delta_lng = math.radians(poi.location.lng - request.center.lng)
+            haversine = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
+            assert 2 * 6_371_008.8 * math.asin(min(1.0, math.sqrt(haversine))) <= request.search_radius_m, "POI outside radius"
+        counts = data.counts.model_dump()
+        if any(counts[facility.value] is None for facility in request.facility_types):
+            assert any(warning.code == "PARTIAL_POI_RESULTS" for warning in result.root.warnings), "PARTIAL_POI_RESULTS warning required"
     elif method == "calculate_walking_times":
         assert data.origin == request.origin
         assert data.travel_mode == request.travel_mode
@@ -166,7 +176,7 @@ def test_mock_never_opens_network_connection(monkeypatch):
     def blocked(*args, **kwargs):
         raise AssertionError("network attempted")
     monkeypatch.delenv("BAIDU_MAP_AK", raising=False)
-    monkeypatch.setenv("BAIDU_SMOKE_TEST", "0")
+    monkeypatch.delenv("RUN_BAIDU_SMOKE", raising=False)
     monkeypatch.setattr(socket, "create_connection", blocked)
     monkeypatch.setattr(socket.socket, "connect", blocked)
     gateway = MockToolGateway()
@@ -258,4 +268,32 @@ def test_reusable_gateway_contract_rejects_wrong_poi_center():
             return wrong_result
 
     with pytest.raises(AssertionError):
+        assert_gateway_contract(WrongPOIGateway(), "search_pois", request, POISearchResult)
+
+
+def test_reusable_gateway_contract_rejects_out_of_radius_poi():
+    request_data = fixture("poi-search-request.example.json")
+    request_data["search_radius_m"] = 1
+    request = POISearchRequest.model_validate(request_data)
+    result = POISearchResult.model_validate(fixture("poi-search-result.example.json"))
+
+    class WrongPOIGateway:
+        def search_pois(self, request):
+            return result
+
+    with pytest.raises(AssertionError, match="radius"):
+        assert_gateway_contract(WrongPOIGateway(), "search_pois", request, POISearchResult)
+
+
+def test_reusable_gateway_contract_rejects_unmarked_partial_poi():
+    request = POISearchRequest.model_validate(fixture("poi-search-request.example.json"))
+    payload = fixture("poi-search-result.example.json")
+    payload["data"]["counts"]["pharmacy"] = None
+    result = POISearchResult.model_validate(payload)
+
+    class WrongPOIGateway:
+        def search_pois(self, request):
+            return result
+
+    with pytest.raises(AssertionError, match="PARTIAL_POI_RESULTS"):
         assert_gateway_contract(WrongPOIGateway(), "search_pois", request, POISearchResult)
