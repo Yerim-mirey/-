@@ -49,7 +49,11 @@ failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
 
 `app/agents/reviewer.py` 使用同一模型接口审查证据包与规划提案，返回 `approved`、`revision_required` 或 `insufficient_evidence` 的 `ReviewResult`。输入提案和输出审查结果的身份、轮次及引用均会核对；事实、数字和过度推断由模型按提示词审查。当前只有受控输出的离线测试，真实审查质量需接入模型后评测。Reviewer 不调用 Tool 或决定 Runtime 下一节点。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、Orchestrator、Planning 和 Reviewer 的离线行为；Runtime 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
+### Agent v1 Phase 6：Runtime State + Conditions
+
+`app/agent_runtime/state.py` 复用公共 `AgentRunState` 创建运行并原子更新状态；`conditions.py` 根据 Brief、Evidence 和 ReviewResult 确定下一步。规划最多 3 轮，Tool 最多重试 2 次；错误是否可重试由后续 Runner 判断。本阶段只提供状态与纯条件函数，不执行 Graph。
+
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为和 Runtime 状态判断；Graph 与 Runner 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
