@@ -6,7 +6,7 @@
 
 `PlanningAgent(llm).create_proposal(brief, evidence, planning_round=1)` 接受已验证的 `LifeCircleBrief` 和 `EvidenceBundle`，通过现有 `StructuredLLM` 生成 `PlanningProposal`。本阶段只有通用模型接口及离线受控测试，不接模型服务、地图 Tool、Runtime 或 Reviewer。
 
-输入必须需要规划、没有待补信息、轮次为正整数，且证据包包含成功的 Diagnosis 结果及其证据引用；诊断指标必须覆盖 Brief 请求的设施类别。否则调用模型前拒绝。
+输入必须需要规划、没有待补信息、轮次为正整数，且证据包包含成功的 Diagnosis 结果及其证据引用；诊断指标必须覆盖 Brief 请求的设施类别。每个证据 JSON Pointer 必须能在证据包中解析；若 Brief 使用坐标，诊断中心必须与该坐标一致。否则调用模型前拒绝。地址到中心点的绑定留给未来 Runtime 的 Tool 调用链。
 
 模型接收 Brief、EvidenceBundle、轮次的 JSON 和 `PlanningProposal` JSON Schema。提示词要求每条问题和建议仅引用已有 evidence ID，忠实处理空值、警告和质量限制，不编造数字、点位或新增设施后的模拟结果。模型返回完整公共契约对象；Python 校验契约、轮次、证据包 ID、所有 evidence_refs 是否存在，以及问题设施类别是否在 Brief 范围内。不修改模型的规划判断。
 

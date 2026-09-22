@@ -42,7 +42,7 @@ assert proposal.planning_round == 1
 
 **Interfaces:** `PlanningOutputError(ValueError)` for malformed or cross-inconsistent model output; invalid inputs raise `ValueError` before model call.
 
-- [x] Add failing tests: non-planning or incomplete brief, missing/failed diagnosis, bad round, wrong bundle/round, unresolved refs, out-of-scope issue type, malformed output, provider exception.
+- [x] Add failing tests: non-planning or incomplete brief, missing/failed diagnosis, dangling pointer, mismatched coordinate, bad round, wrong bundle/round, unresolved refs, out-of-scope issue type, malformed output, provider exception.
 
 ```python
 bad = dict(valid_proposal)

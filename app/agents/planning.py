@@ -6,7 +6,8 @@ from pydantic import ValidationError
 
 from app.agents.prompts import PLANNING_SYSTEM_PROMPT
 from app.providers.llm import StructuredLLM
-from app.schemas.agent import EvidenceBundle, LifeCircleBrief, PlanningProposal
+from app.schemas.agent import EvidenceBundle, LifeCircleBrief, PlanningProposal, _decoded_json_pointer_tokens
+from app.schemas.location import CoordinateInput
 
 
 class PlanningOutputError(ValueError):
@@ -26,13 +27,31 @@ class PlanningAgent:
             raise ValueError("planning_round must be a positive integer")
         if evidence.diagnosis is None or not evidence.diagnosis.root.ok:
             raise ValueError("Planning requires successful diagnosis evidence")
+        center = evidence.diagnosis.root.data.center
+        if isinstance(brief.location, CoordinateInput) and (
+            brief.location.lng != center.lng or brief.location.lat != center.lat
+        ):
+            raise ValueError("Diagnosis center does not match the requested coordinate")
         diagnosed_types = {metric.facility_type for metric in evidence.diagnosis.root.data.metrics}
         if not set(brief.facility_types) <= diagnosed_types:
             raise ValueError("Diagnosis does not cover all requested facility types")
+        evidence_data = evidence.model_dump(mode="json")
+        for ref in evidence.refs:
+            target = evidence_data
+            try:
+                for token in _decoded_json_pointer_tokens(ref.json_pointer):
+                    if isinstance(target, list):
+                        if not token.isdecimal() or str(int(token)) != token:
+                            raise ValueError("Invalid array index")
+                        target = target[int(token)]
+                    else:
+                        target = target[token]
+            except (KeyError, IndexError, TypeError, ValueError):
+                raise ValueError("Evidence reference does not resolve") from None
 
         payload = {
             "brief": brief.model_dump(mode="json"),
-            "evidence": evidence.model_dump(mode="json"),
+            "evidence": evidence_data,
             "planning_round": planning_round,
         }
         raw = self._llm.generate_object(

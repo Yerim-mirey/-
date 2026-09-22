@@ -112,6 +112,26 @@ def test_diagnosis_must_cover_requested_facility_types():
     assert llm.calls == []
 
 
+def test_dangling_evidence_pointer_is_rejected_before_model_call():
+    payload = diagnosis_evidence().model_dump(mode="json")
+    payload["refs"][0]["json_pointer"] = "/diagnosis/data/metrics/99/blind_ratio"
+    llm = RecordingLLM(load("agent-planning-proposal.example.json"))
+    with pytest.raises(ValueError):
+        PlanningAgent(llm).create_proposal(
+            LifeCircleBrief.model_validate(load("agent-brief.example.json")), EvidenceBundle.model_validate(payload)
+        )
+    assert llm.calls == []
+
+
+def test_coordinate_brief_must_match_diagnosis_center():
+    brief_payload = load("agent-brief.example.json")
+    brief_payload["location"] = {"type": "coordinate", "lng": 121.6, "lat": 31.3, "crs": "BD09LL"}
+    llm = RecordingLLM(load("agent-planning-proposal.example.json"))
+    with pytest.raises(ValueError):
+        PlanningAgent(llm).create_proposal(LifeCircleBrief.model_validate(brief_payload), diagnosis_evidence())
+    assert llm.calls == []
+
+
 @pytest.mark.parametrize("change", [
     {"evidence_bundle_id": "evidence:other"},
     {"planning_round": 2},
