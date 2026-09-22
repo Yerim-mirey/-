@@ -20,7 +20,22 @@
 
 Agent 层已进入 Contract 阶段：`app/schemas/agent.py` 定义 Brief、Evidence、Planning、Review 与 Run State 的共享结构，示例位于 `contracts/v1/`。这一阶段只建立数据契约，不实现 Agent 行为、流程路由、真实 LLM 调用或 MVP Gateway；Tool 1–6 仍是唯一的确定性事实层。
 
-项目长期分层是：用户界面 / 未来 Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前阶段先完成确定性的 Core Tool，不提前搭建 Agent、MCP 或复杂 Runtime。详见 `docs/architecture/core-mvp.md`。
+### Agent v1 Phase 2：Mock Tool Gateway
+
+`app/agent_tools/gateway.py` 定义六个 Tool 方法的稳定 `ToolGateway` 接口；后续 Agent 和 Runtime 接收由调用方注入的 Gateway。`MockToolGateway` 使用 `contracts/v1/` 的确定性样例，按方法和规范化请求精确匹配，返回现有 v1 Result；未配置的请求会抛出 `MockScenarioError`。它不调用真实 Service、Provider 或网络，也不负责重试或流程决策。
+
+```python
+from app.agent_tools.mock_gateway import MockToolGateway
+from app.agent_tools.mock_scenarios import load_contract_exchanges
+
+normal_gateway = MockToolGateway()
+partial_gateway = MockToolGateway(load_contract_exchanges("partial"))
+failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
+```
+
+接入更新版 Tool 1–6 时，让真实适配器实现同一接口，并运行 `tests/test_mock_tool_gateway.py` 中可复用的 Gateway 契约检查；无法准确映射到 v1 的语义变化需显式升级契约。Phase 2 只验证模拟交换，不代表真实百度链路验收。
+
+项目长期分层是：用户界面 / 未来 Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool 和 Agent 契约；Phase 2 提供离线 Gateway，Agent 行为与 Runtime 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
