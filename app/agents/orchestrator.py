@@ -28,7 +28,13 @@ class _SemanticExtraction(ContractModel):
     @model_validator(mode="after")
     def standard_scope_is_unambiguous(self) -> "_SemanticExtraction":
         if self.use_standard_facilities and (
-            self.facility_types or self.intent not in {AgentIntent.COMMUNITY_DIAGNOSIS, AgentIntent.PLANNING_ANALYSIS}
+            self.facility_types
+            or self.intent
+            not in {
+                AgentIntent.COMMUNITY_DIAGNOSIS,
+                AgentIntent.PLANNING_ANALYSIS,
+                AgentIntent.BLINDSPOT_QUERY,
+            }
         ):
             raise ValueError("Standard facility scope requires a broad request without named facility types")
         return self
@@ -74,6 +80,8 @@ class OrchestratorAgent:
                 needs_full_diagnosis=extraction.intent in {
                     AgentIntent.COMMUNITY_DIAGNOSIS,
                     AgentIntent.PLANNING_ANALYSIS,
+                    # 盲区必须由 Diagnosis 的等时圈与盲区阶段支撑，POI 数量不足以回答。
+                    AgentIntent.BLINDSPOT_QUERY,
                 },
                 needs_planning=needs_planning,
                 needs_review=needs_planning,

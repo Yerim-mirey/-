@@ -15,6 +15,7 @@ from app.agents.planning import PlanningAgent
 from app.agents.reviewer import ReviewerAgent
 from app.agent_tools.gateway import ToolGateway
 from app.schemas.agent import (
+    AgentIntent,
     AgentRunState,
     CompletionMode,
     EvidenceBundle,
@@ -26,11 +27,13 @@ from app.schemas.common import CenterPoint, ErrorDetail, WarningItem
 from app.schemas.diagnosis import DiagnosisRequest, DiagnosisResult
 from app.schemas.location import CoordinateInput, LocationRequest, LocationResult
 from app.schemas.poi import POISearchRequest, POISearchResult
+from app.schemas.routing import RouteTarget, RoutingRequest, RoutingResult
 
 # 15-minute walking scale; the Diagnosis request carries its own radius.
 POI_SEARCH_RADIUS_M = 1000
 
 INSUFFICIENT_EVIDENCE_CODE = "INSUFFICIENT_EVIDENCE"
+NO_ROUTING_TARGET_CODE = "NO_ROUTING_TARGET"
 TOOL_FAILED_CODE = "TOOL_FAILED"
 GATEWAY_ERROR_CODE = "GATEWAY_ERROR"
 UNEXPECTED_ERROR_CODE = "UNEXPECTED_ERROR"
@@ -167,9 +170,69 @@ def _fetch_from_tools(
         bundle = _fetch_diagnosis(state, gateway, brief, location, attempt)
     else:
         bundle = _fetch_pois(state, gateway, brief, location, location_result, attempt)
+        if isinstance(bundle, EvidenceBundle) and _asks_for_walking_time(brief):
+            bundle = _add_routing(state, gateway, location, bundle)
     if isinstance(bundle, AgentRunState):
         return bundle
     return _store_evidence(state, bundle, brief.needs_planning)
+
+
+def _asks_for_walking_time(brief: LifeCircleBrief) -> bool:
+    """Only accessibility questions need Routing on top of the POI facts."""
+    return brief.intent is AgentIntent.ACCESSIBILITY_QUERY
+
+
+def _add_routing(
+    state: AgentRunState,
+    gateway: ToolGateway,
+    origin: CenterPoint,
+    bundle: EvidenceBundle,
+) -> EvidenceBundle | AgentRunState:
+    """Route from the resolved centre to every POI; POI-only evidence if none."""
+    pois = bundle.poi.root.data.pois
+    if not pois:
+        return _with_warning(
+            bundle,
+            WarningItem(
+                code=NO_ROUTING_TARGET_CODE,
+                message="本次检索没有可用设施，无法给出步行时间事实。",
+            ),
+        )
+    request = RoutingRequest(
+        schema_version="1.0",
+        origin=origin,
+        targets=[RouteTarget(target_id=poi.poi_id, location=poi.location) for poi in pois],
+        travel_mode="walking",
+    )
+    try:
+        routing = gateway.calculate_walking_times(request)
+    except Exception as exc:  # noqa: BLE001 - Mock and MVP Gateways may raise
+        return _failure_state(
+            state,
+            _ToolFailure(code=GATEWAY_ERROR_CODE, message=str(exc), retryable=True, warnings=[]),
+        )
+    if not routing.root.ok:
+        return _failure_state(
+            state, _failure(TOOL_FAILED_CODE, "calculate_walking_times", routing)
+        )
+    return _with_routing(bundle, routing)
+
+
+def _with_warning(bundle: EvidenceBundle, warning: WarningItem) -> EvidenceBundle:
+    return EvidenceBundle.model_validate({
+        **bundle.model_dump(mode="json"),
+        "warnings": _merged_warnings(bundle.warnings, [warning]),
+    })
+
+
+def _with_routing(bundle: EvidenceBundle, routing: RoutingResult) -> EvidenceBundle:
+    return EvidenceBundle.model_validate({
+        **bundle.model_dump(mode="json"),
+        "refs": [ref.model_dump(mode="json") for ref in bundle.refs]
+        + [ref.model_dump(mode="json") for ref in _routing_refs(routing)],
+        "routing": routing.model_dump(mode="json"),
+        "warnings": _merged_warnings(bundle.warnings, list(routing.root.warnings)),
+    })
 
 
 def _store_evidence(
@@ -395,6 +458,18 @@ def _poi_refs(poi: POISearchResult) -> list[EvidenceRef]:
             summary=f"已检索设施：{item.name}（{item.facility_type.value}）",
         )
         for index, item in enumerate(poi.root.data.pois)
+    ]
+
+
+def _routing_refs(routing: RoutingResult) -> list[EvidenceRef]:
+    return [
+        EvidenceRef(
+            evidence_id=f"routing:target-{index}",
+            kind="routing",
+            json_pointer=_pointer("routing", "data", "routes", index),
+            summary=f"步行路由 {route.target_id} 的状态与时长来自 Routing Tool",
+        )
+        for index, route in enumerate(routing.root.data.routes)
     ]
 
 

@@ -349,7 +349,7 @@ class LifeCircleBrief(ContractModel):
         expected = {
             AgentIntent.FACILITY_QUERY: (False, False, False),
             AgentIntent.ACCESSIBILITY_QUERY: (False, False, False),
-            AgentIntent.BLINDSPOT_QUERY: (False, False, False),
+            AgentIntent.BLINDSPOT_QUERY: (True, False, False),
             AgentIntent.COMMUNITY_DIAGNOSIS: (True, False, False),
             AgentIntent.PLANNING_ANALYSIS: (True, True, True),
         }[self.intent]

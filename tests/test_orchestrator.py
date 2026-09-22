@@ -55,7 +55,7 @@ def test_orchestrator_returns_valid_brief_and_sends_only_semantic_schema():
     [
         ("facility_query", (False, False, False)),
         ("accessibility_query", (False, False, False)),
-        ("blindspot_query", (False, False, False)),
+        ("blindspot_query", (True, False, False)),
         ("community_diagnosis", (True, False, False)),
         ("planning_analysis", (True, True, True)),
     ],

@@ -454,3 +454,67 @@ def test_insufficient_evidence_consumes_tool_retry_budget():
         "diagnose_community",
     ]
     assert any(item.code == "INSUFFICIENT_EVIDENCE" for item in state.warnings)
+
+
+def test_accessibility_query_routes_to_every_poi():
+    """Phase 8: an accessibility brief needs Routing facts beyond POI counts."""
+    from app.schemas.poi import POISearchRequest
+    from app.schemas.routing import RoutingRequest, RoutingResult
+
+    center = {"lng": 121.506123, "lat": 31.282456, "crs": "BD09LL"}
+    poi_payload = {
+        "ok": True,
+        "data": {
+            "center": dict(center),
+            "pois": [{
+                "poi_id": "baidu:mock-market",
+                "name": "示例菜市场",
+                "facility_type": "market",
+                "location": dict(center),
+                "address": None,
+                "source": "baidu",
+            }],
+            "counts": {"market": 1, "pharmacy": None, "primary_school": None},
+        },
+        "warnings": [{"code": "PARTIAL_POI_RESULTS", "message": "其他类别未查询。"}],
+        "meta": {"schema_version": "1.0", "provider": "baidu"},
+    }
+
+    class RoutingGateway(FakeGateway):
+        def search_pois(self, request):
+            self.calls.append("search_pois")
+            return POISearchResult.model_validate(poi_payload)
+
+        def calculate_walking_times(self, request):
+            self.calls.append("calculate_walking_times")
+            return RoutingResult.model_validate({
+                "ok": True,
+                "data": {
+                    "origin": request.origin.model_dump(mode="json"),
+                    "travel_mode": "walking",
+                    "routes": [{
+                        "target_id": request.targets[0].target_id,
+                        "location": request.targets[0].location.model_dump(mode="json"),
+                        "status": "success",
+                        "distance_m": 640,
+                        "duration_s": 520,
+                    }],
+                    "summary": {"requested": 1, "success": 1, "no_route": 0, "unavailable": 0},
+                },
+                "warnings": [],
+                "meta": {"schema_version": "1.0", "provider": "baidu"},
+            })
+
+    gateway = RoutingGateway()
+    state, _ = run(
+        gateway,
+        extraction_output=extraction(intent="accessibility_query", facility_types=["market"]),
+    )
+    assert state.status.value == "completed"
+    assert state.evidence.routing.root.data.routes[0].duration_s == 520
+    assert [ref.kind.value for ref in state.evidence.refs] == ["location", "poi", "routing"]
+    assert [call if isinstance(call, str) else call.method for call in gateway.calls] == [
+        "resolve_location",
+        "search_pois",
+        "calculate_walking_times",
+    ]
