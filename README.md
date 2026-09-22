@@ -112,7 +112,7 @@ RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_live_e2e a
 
 ### 百度配额与限速
 
-Core Tool 与 Agent 的真相层共用同一份按 AK 的配额预算。`app/providers/baidu/quota.py` 的 `BaiduQuotaGuard` 是进程内按 AK 共享的滑动窗口：一秒窗口内最多放行 `routes_per_second` 个**算路目标**，并要求连续算路请求之间至少间隔 `1 - 1/routes_per_second` 秒，使一批请求不会在一个瞬间吃掉整秒预算。请求按 FIFO 排队，只有等待超过 `max_wait_seconds` 才会拒绝，并表现为既有契约里可重试的 `RATE_LIMITED`。`RoutingService` 的拆批大小由 Provider 提供的 `max_batch_routes` 决定，因此配额窗口会直接决定拆批粒度，而不是写死的 50。
+Core Tool 与 Agent 的真相层共用同一份按 AK 的配额预算。`app/providers/baidu/quota.py` 的 `BaiduQuotaGuard` 是进程内按 AK 共享的滑动窗口：一秒窗口内最多放行 `routes_per_second` 个**算路目标**。这条窗口约束本身就能压住速率——每个被放行的请求都会被记录，所以累计放行量不可能超过「配额 × 已流逝秒数」；单批上限（`max_batch_routes`）又保证一个请求吃不下整个窗口。**不要把「配置的速率」误当成「请求之间必须隔多久」**：曾有一版额外强制最小间隔，结果在窗口还有余量时也把请求拒之门外一整个窗口，并发下 8 个目标实测从预算要求的 1.00 秒劣化到 5.03 秒，已删除（`77165bd`）。请求按 FIFO 排队，只有等待超过 `max_wait_seconds` 才会拒绝，并表现为既有契约里可重试的 `RATE_LIMITED`。`RoutingService` 的拆批大小由 Provider 提供的 `max_batch_routes` 决定，因此配额窗口会直接决定拆批粒度，而不是写死的 50。
 
 默认值对应免费版（3 目标/秒）；付费配额通过环境变量调整，密钥与配额参数都只从本机环境读取：
 

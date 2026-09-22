@@ -8,10 +8,10 @@
 | --- | --- |
 | 仓库 | `/Users/liuyanhe/Desktop/15分钟生活圈智能体检与规划助手/` |
 | 分支 | `feat/mvp-tool-gateway` |
-| 本文基准 HEAD | `c4b39e5`，`test: attribute Planning contract rejections to a specific cause` |
+| 本文基准 HEAD | `77165bd`，`fix: drop the minimum-spacing rule from the Baidu quota guard` |
 | 本轮起点 | `aaf9d0c`（Phase 9 交接文档） |
-| 本轮新增提交 | 5 个：`a406e70` 配额层、`e8ec055` 验收入口、`2be62ba` 自检、`f41ce30` 文档、`c4b39e5` 拒绝诊断 |
-| 改动规模 | 17 个文件、+2474 / −21 行 |
+| 本轮新增提交 | 6 个：`a406e70` 配额层、`e8ec055` 验收入口、`2be62ba` 自检、`f41ce30` 文档、`c4b39e5` 拒绝诊断、`77165bd` 配额约束修正 |
+| 改动规模 | 见 `git diff --stat aaf9d0c..HEAD` |
 
 对齐的冻结基线：`docs/architecture/15分钟生活圈_Agent_App_Architecture_v1.0_交接文档.md` 第 4、11–16、20–22 节。本阶段未改动 Tool 1–6 的业务算法、任何 v1 Contract/Schema，也未改动百度单批 50 目标的限制。
 
@@ -21,10 +21,16 @@
 
 `docs/test-report/phase9-mvp-tool-gateway-2026-09-22.md` 记录：队友的正式验收之所以通过，靠的是**验收器自己的临时节奏**（每批最多 3 个目标、批间约 1.05 秒），而 `RoutingService` 与 API 都没有跨请求共享的限速。`app/providers/baidu/quota.py` 把这个保护放到真正执行限流的位置——HTTP 调用之前。
 
-`BaiduQuotaGuard` 按 AK 在进程内共享，两条约束缺一不可：
+`BaiduQuotaGuard` 按 AK 在进程内共享，只用**一条**约束：
 
-1. 滚动 1 秒窗口内放行的**算路目标**数不超过 `routes_per_second`（对应控制台按目标计量的配额）；
-2. 连续算路请求之间至少间隔 `1 − 1/routes_per_second` 秒，避免单批请求在一个瞬间吃掉整秒预算——只做窗口约束时，一批 3 个目标会立刻打满窗口并以限流告终。
+1. 滚动 1 秒窗口内放行的**算路目标**数不超过 `routes_per_second`（对应控制台按目标计量的配额）。
+
+每个被放行的请求都会被记录，因此累计目标数永远不可能超过「`routes_per_second` × 已流逝秒数」，而单批上限又保证一个请求吃不下整个窗口。**曾有一版额外要求「连续请求最小间隔 `1 − 1/routes_per_second`」，这个约束已被删除（`77165bd`）**，因为它不提供窗口之外的任何安全性，却造成两类实际问题：
+
+1. **即使窗口还有余量，也要把一个请求拒之门外一整个窗口。** 请求 2 命中该规则时会睡满一个窗口，哪怕它只要 1 个目标、而 100 个预算才用掉 2 个。对长时间满载运行代价不大（1000 个目标：3/秒时 222 秒 vs 下限 333 秒；100/秒时 8.9 秒 vs 下限 10.0 秒），但**小请求与并发下的伤害很明显**：6/秒配额、4 个线程共 8 个目标实测 **5.03 秒**，而预算只要求 **1.00 秒**；删除后即为 1.00 秒。
+2. **并发退化成排队跳变**，而且这个代价只在并发测试里才暴露出来。
+
+教训：「配置的速率」与「每次请求之间必须隔多久」不是一回事。前者由滚动窗口正确表达；后者在配额未被用尽时只是额外的延迟。
 
 请求按 FIFO 排队；只有等待会超过 `max_wait_seconds` 时才拒绝，并表现为既有契约里可重试的 `RATE_LIMITED`。`RoutingService` 的拆批大小改为读取 Provider 的 `max_batch_routes`，因此**配额窗口决定拆批粒度**，而不是写死的 50。`app/providers/baidu/live.py` 保证 `MVPToolGateway.from_baidu_ak(...)` 与 `app/api/main.py` 共用同一份按 AK 预算。
 
@@ -148,8 +154,8 @@ RUN_DEEPSEEK_SMOKE=1 python -m scripts.diagnose_planning_rejections \
   --rounds 12 --bundle realistic --report data/cache/planning-rejection-realistic.json
 ```
 
-本机离线结果（`c4b39e5`）：**515 passed、4 skipped、2 warnings**；Contract 校验输出 `Core MVP Tool 1-6 and Agent v1 contracts validated successfully.`。本轮新增 84 项离线测试（起点 431）。
+本机离线结果（`77165bd`）：**516 passed、4 skipped、2 warnings**；Contract 校验输出 `Core MVP Tool 1-6 and Agent v1 contracts validated successfully.`。本轮新增 85 项离线测试（起点 431）。
 
-新增测试覆盖：配额窗口与反突发间隔、跨线程 FIFO 串行、拒绝上界、按 AK 共享与隔离、拆批传播、`--self-check` 全链路、JSON Pointer 解析、Evidence/Proposal/Review 绑定核对、Run ID 格式、以及拒绝归因分类器的每个分支（含“指纹不得携带输出原文”）。
+新增测试覆盖：配额窗口与「小请求不被压成每秒一次」的回归、跨线程 FIFO 串行、并发下**聚合**放行量不超过该时段预算、拒绝上界、按 AK 共享与隔离、拆批传播、`--self-check` 全链路、JSON Pointer 解析、Evidence/Proposal/Review 绑定核对、Run ID 格式、以及拒绝归因分类器的每个分支（含“指纹不得携带输出原文”）。
 
 未提交、也未写入本文的内容：`.env`、AK、完整带密钥 URL、百度原始响应、模型原始输出。`data/cache/` 下两个诊断 JSON 属本机临时产物（该目录已被 Git 忽略）。
