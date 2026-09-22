@@ -28,6 +28,7 @@ from scripts.verify_agent_live_e2e import (
     check_semantics,
     observe,
     resolve_pointer,
+    run_id_for,
     sanitize,
 )
 
@@ -322,3 +323,43 @@ def test_sanitize_tolerates_a_missing_model_key():
     cleaned = sanitize("ak=abc", "abc", None)
 
     assert "abc" not in cleaned
+
+
+# --- Run identity -----------------------------------------------------------
+
+
+def _state_with_run_id(run_id: str) -> AgentRunState:
+    """Validate a Run ID the way the Runtime does: through the Run State schema."""
+    return AgentRunState.model_validate(
+        {
+            "schema_version": "1.0",
+            "run_id": run_id,
+            "status": "pending",
+            "completion_mode": None,
+            "user_message": "run id check",
+            "brief": None,
+            "evidence": None,
+            "planning_proposal": None,
+            "review_result": None,
+            "planning_round": 0,
+            "tool_retry_count": 0,
+            "warnings": [],
+            "errors": [],
+        }
+    )
+
+
+def test_every_case_id_produces_a_schema_valid_run_id():
+    """The real run must not fail on a Run ID format the schema rejects."""
+    for case in CASES:
+        _state_with_run_id(run_id_for(case.case_id))
+
+
+def test_run_id_helper_carries_the_phase_prefix():
+    assert run_id_for("poi-address") == "run:phase10-poi-address"
+
+
+def test_bare_case_id_would_be_rejected_by_the_schema():
+    """Regression guard: the pre-fix format really was invalid."""
+    with pytest.raises(Exception):
+        _state_with_run_id("phase10-poi-address")

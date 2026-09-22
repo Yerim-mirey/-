@@ -21,6 +21,11 @@ Modes
 ``agent "<message>"``
     One ad-hoc message through the same path.
 
+``--self-check``
+    The same run/check/report path with deterministic Tool results and a fixed
+    Brief. No quota, no network, no credentials: use it to confirm this script
+    is wired correctly before spending anything real.
+
 Usage
 -----
     set -a; source .env; set +a
@@ -42,9 +47,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,7 +61,7 @@ from app.providers.baidu.geocoding import BaiduGeocodingError, BaiduGeocodingPro
 from app.providers.baidu.live import build_live_providers
 from app.providers.baidu.quota import snapshot
 from app.providers.deepseek import DeepSeekLLM, api_key_from_env
-from app.schemas.agent import AgentRunState, CompletionMode, RunStatus
+from app.schemas.agent import AgentRunState, RunStatus
 
 
 # A fixed, real Shanghai centre: the same one the 2026-09-22 Tool acceptance
@@ -120,6 +124,128 @@ CASES: tuple[Case, ...] = (
         note="缺地点；必须停在 waiting_for_input 且零 Tool 调用",
     ),
 )
+
+
+# --- Self-check: exercise this script without spending anything ------------
+
+SELF_CHECK_CASE = Case(
+    case_id="self-check",
+    message=f"请查询{FIXED_ADDRESS}附近的菜市场、药店和小学",
+    expect_status=RunStatus.COMPLETED,
+    expect_planning=False,
+    expect_review=False,
+    note="离线自检：用确定性结果验证脚本自身的检查与报告逻辑",
+)
+
+
+class SelfCheckGateway:
+    """Deterministic ToolGateway so `--self-check` can verify this script.
+
+    It is NOT a test of the Core Tools; plenty of tests do that. Its only job
+    is to let the acceptance run logic, the state checkers and the report
+    writer execute end to end with no quota, no network and no credentials,
+    so a wiring mistake surfaces before a real run rather than during one.
+    """
+
+    def __init__(self, center: dict) -> None:
+        self.center = dict(center)
+        self.calls: list[str] = []
+
+    def resolve_location(self, request):
+        from app.schemas.location import LocationResult
+
+        self.calls.append("resolve_location")
+        return LocationResult.model_validate({
+            "ok": True,
+            "data": {
+                "center": self.center,
+                "label": "四川北路街道",
+                "formatted_address": FIXED_ADDRESS,
+                "source": "baidu_geocoding",
+            },
+            "warnings": [],
+            "meta": {"schema_version": "1.0", "provider": "baidu"},
+        })
+
+    def search_pois(self, request):
+        from app.schemas.poi import POISearchResult
+
+        self.calls.append("search_pois")
+        center = self.center
+        points = [
+            {
+                "poi_id": f"self:{facility}",
+                "name": f"自检{facility}",
+                "facility_type": facility,
+                "location": {"lng": center["lng"] + 0.001, "lat": center["lat"], "crs": "BD09LL"},
+                "address": None,
+                "source": "baidu",
+            }
+            for facility in request.facility_types
+        ]
+        return POISearchResult.model_validate({
+            "ok": True,
+            "data": {
+                "center": center,
+                "pois": points,
+                "counts": {facility: 1 for facility in request.facility_types},
+            },
+            "warnings": [],
+            "meta": {"schema_version": "1.0", "provider": "baidu"},
+        })
+
+    def calculate_walking_times(self, request):
+        from app.schemas.routing import RoutingResult
+
+        self.calls.append("calculate_walking_times")
+        routes = [
+            {
+                "target_id": target.target_id,
+                "location": target.location.model_dump(),
+                "status": "success",
+                "distance_m": 200,
+                "duration_s": 150,
+            }
+            for target in request.targets
+        ]
+        return RoutingResult.model_validate({
+            "ok": True,
+            "data": {
+                "origin": request.origin.model_dump(),
+                "travel_mode": "walking",
+                "routes": routes,
+                "summary": {
+                    "requested": len(routes),
+                    "success": len(routes),
+                    "no_route": 0,
+                    "unavailable": 0,
+                },
+            },
+            "warnings": [],
+            "meta": {"schema_version": "1.0", "provider": "baidu"},
+        })
+
+    def generate_isochrone(self, request):
+        raise AssertionError("self-check 案例不应生成等时圈")
+
+    def detect_blindspots(self, request):
+        raise AssertionError("self-check 案例不应分析盲区")
+
+    def diagnose_community(self, request):
+        raise AssertionError("self-check 案例不应执行完整体检")
+
+
+class SelfCheckLLM:
+    """A StructuredLLM returning one fixed, schema-valid Brief."""
+
+    def generate_object(self, *, system_prompt, user_message, response_schema):
+        return {
+            "intent": "facility_query",
+            "user_goal": "了解社区设施分布",
+            "location": {"type": "address", "query": FIXED_ADDRESS, "city": "上海市"},
+            "facility_types": ["market", "pharmacy", "primary_school"],
+            "use_standard_facilities": False,
+        }
 
 
 class Recorder:
@@ -310,17 +436,26 @@ def observe(state: AgentRunState, recorder: Recorder) -> None:
         ]
 
 
+def run_id_for(case_id: str) -> str:
+    """Build a Run ID that satisfies the `run:` pattern the schema enforces.
+
+    A bare `phase10-<case>` fails validation, which the self-check caught; the
+    real run must never fail for a reason this trivial.
+    """
+    return f"run:phase10-{case_id}"
+
+
 def run_case(
     case: Case,
     gateway: MVPToolGateway,
     model: DeepSeekLLM,
 ) -> Recorder:
     recorder = Recorder(case.case_id, case.message)
-    guard = gateway.quota_guard
+    guard = getattr(gateway, "quota_guard", None)
     recorder.route_targets_before = guard.granted_routes if guard else 0
     started = time.monotonic()
     state = run_agent(
-        run_id=f"phase10-{case.case_id}",
+        run_id=run_id_for(case.case_id),
         user_message=case.message,
         orchestrator=OrchestratorAgent(model),
         gateway=gateway,
@@ -384,6 +519,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="",
         help="把脱敏的机器可读结果写到这个路径",
     )
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="离线自检：确定性 Tool 结果 + 固定 Brief，不消耗配额与模型额度",
+    )
     args = parser.parse_args(argv)
 
     if args.mode == "probe":
@@ -392,38 +532,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         return run_probe()
 
+    model_key: str | None = None
     ak = os.environ.get("BAIDU_MAP_AK", "").strip()
-    if not ak:
-        print("SKIPPED: BAIDU_MAP_AK 未配置。")
-        return 0
-    model_key = api_key_from_env()
-    if os.environ.get("RUN_DEEPSEEK_SMOKE") != "1" or model_key is None:
-        print("SKIPPED: 需要 RUN_DEEPSEEK_SMOKE=1 且 DEEPSEEK_API_KEY 已配置。")
-        return 0
-    if os.environ.get("RUN_BAIDU_SMOKE") != "1":
-        print("SKIPPED: 需要 RUN_BAIDU_SMOKE=1 才允许真实百度调用。")
-        return 0
-
-    model = DeepSeekLLM(model_key)
-    providers = build_live_providers(ak)
-    gateway = MVPToolGateway(
-        geocode=providers.geocoding.geocode,
-        poi_provider=providers.poi,
-        routing_provider=providers.routing,
-    )
-    guard = providers.guard
-
-    if args.mode == "agent":
-        if not args.message:
-            parser.error("agent 模式需要一条用户消息")
-        cases = (Case("ad-hoc", args.message, RunStatus.COMPLETED, False, False, True, "临时消息"),)
+    if args.self_check:
+        # Fully offline: deterministic Tool results and one fixed Brief, so the
+        # script's own run/check/report path is exercised without spending
+        # quota or model requests.
+        gateway = SelfCheckGateway(FIXED_CENTER)
+        model = SelfCheckLLM()
+        guard = None
+        cases = (SELF_CHECK_CASE,)
+        print("SELF-CHECK 模式：离线确定性结果，不消耗配额与模型额度")
     else:
-        cases = tuple(
-            case
-            for case in CASES
-            if (not args.only or case.case_id in args.only)
-            and (args.include_diagnosis or not case.needs_diagnosis)
+        if not ak:
+            print("SKIPPED: BAIDU_MAP_AK 未配置。")
+            return 0
+        model_key = api_key_from_env()
+        if os.environ.get("RUN_DEEPSEEK_SMOKE") != "1" or model_key is None:
+            print("SKIPPED: 需要 RUN_DEEPSEEK_SMOKE=1 且 DEEPSEEK_API_KEY 已配置。")
+            return 0
+        if os.environ.get("RUN_BAIDU_SMOKE") != "1":
+            print("SKIPPED: 需要 RUN_BAIDU_SMOKE=1 才允许真实百度调用。")
+            return 0
+
+        model = DeepSeekLLM(model_key)
+        providers = build_live_providers(ak)
+        gateway = MVPToolGateway(
+            geocode=providers.geocoding.geocode,
+            poi_provider=providers.poi,
+            routing_provider=providers.routing,
         )
+        guard = providers.guard
+
+        if args.mode == "agent":
+            if not args.message:
+                parser.error("agent 模式需要一条用户消息")
+            cases = (Case("ad-hoc", args.message, RunStatus.COMPLETED, False, False, True, "临时消息"),)
+        else:
+            cases = tuple(
+                case
+                for case in CASES
+                if (not args.only or case.case_id in args.only)
+                and (args.include_diagnosis or not case.needs_diagnosis)
+            )
 
     skipped = [case.case_id for case in CASES if case not in cases]
     if not cases:
@@ -432,8 +583,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "请检查 --only 的取值。"
         )
         return 2
-    print(f"model={model.model}")
-    print(f"quota={snapshot(guard).describe()}")
+    print(f"model={getattr(model, 'model', type(model).__name__)}")
+    print(f"quota={snapshot(guard).describe() if guard else '未启用（self-check）'}")
     print(f"cases={[case.case_id for case in cases]}")
     if skipped:
         print(f"skipped={skipped}（--include-diagnosis / --only 控制）")
@@ -458,19 +609,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"        ✗ {name}: {detail}")
         print()
 
-    print(f"usage(last)={model.last_usage}")
-    print(f"quota final={snapshot(guard).describe()}")
+    print(f"usage(last)={getattr(model, 'last_usage', None)}")
+    if guard is not None:
+        print(f"quota final={snapshot(guard).describe()}")
     passed = sum(recorder.passed for recorder in recorders)
     print(f"RESULT: {passed}/{len(recorders)} 案例通过")
 
     if args.report:
-        payload = {
-            "model": model.model,
-            "quota": {
+        quota_payload = None
+        if guard is not None:
+            quota_payload = {
                 "routes_per_second": guard.routes_per_second,
                 "max_batch_routes": guard.max_batch_routes,
                 "granted_routes": guard.granted_routes,
-            },
+            }
+        payload = {
+            "model": getattr(model, "model", type(model).__name__),
+            "quota": quota_payload,
             "cases": [
                 {
                     key: value
@@ -482,7 +637,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     for name, ok, detail in recorder.checks
                 ]}
                 for recorder in recorders
-            ],        }
+            ],
+        }
         text = sanitize(json.dumps(payload, ensure_ascii=False, indent=2), ak, model_key)
         with open(args.report, "w", encoding="utf-8") as handle:
             handle.write(text)
