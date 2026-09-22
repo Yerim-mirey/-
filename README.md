@@ -73,6 +73,19 @@ env -u BAIDU_MAP_AK -u RUN_BAIDU_SMOKE python -m pytest tests/e2e -q
 
 本阶段同时修复了 Phase 7 的取证缺口：**可达性提问**需要 Routing 事实，Runner 现在以解析中心为起点调用 `calculate_walking_times`（没有可路由设施时不发请求，改为写入 `NO_ROUTING_TARGET` warning）；**盲区提问**不能由 POI 计数支撑，`LifeCircleBrief` 现在要求它走完整体检，由 Diagnosis 的等时圈与盲区覆盖回答。`completed` 只表示流程走完，不等于用户的问题已被证据回答。
 
+### Agent v1 Phase 10 准备：DeepSeek 模型适配器
+
+`app/providers/deepseek.py` 的 `DeepSeekLLM` 实现 `StructuredLLM` 协议，三个 Agent 可直接注入，无需改写。DeepSeek 的 JSON Output 模式不接收 JSON Schema，因此适配器把 `response_schema` 渲染进系统提示词（满足其"提示词必须含 json 字样并给出格式示例"的要求），返回对象仍由各 Agent 的 Pydantic 模型校验。`max_tokens` 默认为 4096 以避免截断；官方说明 JSON 模式偶尔返回空内容，这种情况与非法 JSON、HTTP 错误、网络失败分别抛出 `LLMResponseError` 与 `LLMTransportError`，由 Runner 转成 `failed` Run，不会伪装成成功。
+
+模型默认 `deepseek-flash`，可用 `DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_API_KEY` 覆盖。密钥只放在本机未入 Git 的 `.env`：
+
+```bash
+set -a; source .env; set +a
+RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_llm_live.py
+```
+
+该脚本恰好发出 3 次请求（每个角色一次），只打印公开摘要，不含密钥、原始提示词或完整模型输出。它验证的是**输出符合公共 Schema**，不是回答质量；真实模型质量评测属于 Phase 10。默认测试完全离线：`tests/test_deepseek_provider.py` 用注入的 `httpx.MockTransport` 断言请求载荷与全部失败分支，真实调用被 `RUN_DEEPSEEK_SMOKE=1` 与 `DEEPSEEK_API_KEY` 双重门控。
+
 项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、可运行的 Graph 与 Runner，以及离线端到端场景矩阵；真实 MVP Gateway（Phase 9）与真实模型/百度链路（Phase 10）仍待后续阶段。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
