@@ -53,7 +53,15 @@ failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
 
 `app/agent_runtime/state.py` 复用公共 `AgentRunState` 创建运行并原子更新状态；替换已有 Brief、Evidence 或 Proposal 时，即使 ID 不变，也必须清除下游旧结果。`conditions.py` 根据 Brief、Evidence 和 ReviewResult 确定下一步。规划最多 3 轮，Tool 最多重试 2 次；错误是否可重试由后续 Runner 判断。本阶段只提供状态与纯条件函数，不执行 Graph。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为和 Runtime 状态判断；Graph 与 Runner 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
+### Agent v1 Phase 7：Graph + Runner
+
+`app/agent_runtime/graph.py` 只声明节点与确定性连线：`ORCHESTRATE → FETCH_EVIDENCE → (PLAN → REVIEW →)* FINALIZE`，Review 回路按 `conditions.py` 的结果回到 PLAN、FETCH_EVIDENCE 或 FINALIZE；`PLAN` 只有一条无条件边，Brief 缺信息时停在 `waiting_for_input`。`app/agent_runtime/runner.py` 的 `run_agent(...)` 是唯一执行者：创建 Run、按图执行节点、装配证据、判断 Tool 重试与回路、写入终态。
+
+Runner 先解析地点，再按任务类型取证：完整体检只调用 `diagnose_community()`（`EvidenceBundle` 不允许 Diagnosis 与低层结果并存），普通查询调用 `resolve_location` 与 `search_pois`。证据引用由 Runner 依据实际 Tool 结果生成。Tool 失败时 `retryable=false` 立即失败，`retryable=true` 且预算未耗尽时消耗一次重试并重取；预算耗尽或出现未配置的 Mock 场景则以 `failed` 终止，不留半成品证据。`revision_required` 推进规划轮次并清除被消费的 Proposal/Review；`insufficient_evidence` 在预算允许时重新取证（更换 Evidence 会清除旧 Proposal/Review），预算不足或达到 3 轮上限时以 `with_limitations` 完成并写入 warning。
+
+本阶段仍不接真实模型、真实百度链路、API 入口或持久化；完整 Mock E2E 属于 Phase 8。测试使用受控模型输出与既有 Mock Gateway，覆盖节点与转移、等待输入、重试成功与耗尽、非重试失败、规划轮次上限及补证据回路（`tests/test_agent_graph.py`、`tests/test_agent_runner.py`）。
+
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断，以及可运行的 Graph 与 Runner；Mock E2E 与真实链路仍待后续阶段。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
