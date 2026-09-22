@@ -96,7 +96,34 @@ RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_llm_live
 
 思考模式默认关闭：DeepSeek 的 reasoning tokens 计入 `max_tokens`，结构化抽取的输出很小，开启思考会把预算耗尽并导致 JSON 截断（首次真实调用即遇到）。需要时可用 `thinking=True` 或 `DEEPSEEK_THINKING=1` 开启；命中 `max_tokens` 会抛 `LLMOutputTruncated`，与格式错误明确区分。真实调用观测见 `docs/test-report/phase10-prep-deepseek-adapter-2026-09-22.md`。默认测试完全离线：`tests/test_deepseek_provider.py` 用注入的 `httpx.MockTransport` 断言请求载荷与全部失败分支，真实调用被 `RUN_DEEPSEEK_SMOKE=1` 与 `DEEPSEEK_API_KEY` 双重门控。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景，以及 Phase 9 的真实 Core Service 适配器离线验证；真实模型与真实 Gateway 的完整 Agent 链路属于 Phase 10。详见 `docs/architecture/core-mvp.md`。
+### Agent v1 Phase 10：真实链路验收
+
+真实模型 + 真实百度 + 真实 Gateway 的完整链路验收入口是 `scripts/verify_agent_live_e2e.py`，它按用户实际路径运行：`run_agent(...)` → `MVPToolGateway` → Core Tool 1–6 → 百度，并由 `DeepSeekLLM` 驱动三个 Agent。它**不是**默认测试的一部分，只有显式开关才会联网：
+
+```bash
+set -a; source .env; set +a
+RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_live_e2e probe
+RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_live_e2e acceptance
+```
+
+`probe` 只发一次地理编码请求，用来把“AK 未生效或 IP 不在白名单”与真正的链路故障区分开，几乎不消耗配额——上表提到的部署出口 IP 白名单要求对本机同样适用。`acceptance` 跑固定案例矩阵（地址输入、坐标输入、规划路径、以及必须停在 `waiting_for_input` 的缺地点案例），逐条核对终态、`completion_mode`、Evidence 的 JSON Pointer、Proposal 与 Review 的绑定关系。`--self-check` 用确定性结果离线跑通同一套检查与报告逻辑，不消耗任何配额，适合在真实运行前确认脚本本身没接错。
+
+含完整体检的案例需要显式加 `--include-diagnosis`：默认三类设施的一次 Diagnosis 约 1600 个算路目标，按 3 QPS 节流本身就要约十分钟。`--report <path>` 可写出机器可读的脱敏结果，AK 与模型密钥都会被替换掉。
+
+### 百度配额与限速
+
+Core Tool 与 Agent 的真相层共用同一份按 AK 的配额预算。`app/providers/baidu/quota.py` 的 `BaiduQuotaGuard` 是进程内按 AK 共享的滑动窗口：一秒窗口内最多放行 `routes_per_second` 个**算路目标**，并要求连续算路请求之间至少间隔 `1 - 1/routes_per_second` 秒，使一批请求不会在一个瞬间吃掉整秒预算。请求按 FIFO 排队，只有等待超过 `max_wait_seconds` 才会拒绝，并表现为既有契约里可重试的 `RATE_LIMITED`。`RoutingService` 的拆批大小由 Provider 提供的 `max_batch_routes` 决定，因此配额窗口会直接决定拆批粒度，而不是写死的 50。
+
+默认值对应免费版（3 目标/秒）；付费配额通过环境变量调整，密钥与配额参数都只从本机环境读取：
+
+```text
+BAIDU_ROUTES_PER_SECOND=3
+BAIDU_QUOTA_MAX_WAIT_SECONDS=180
+```
+
+`MVPToolGateway.from_baidu_ak(...)` 与 `app/api/main.py` 都经 `app/providers/baidu/live.py` 构造 Provider，所以 Agent 侧与 Core HTTP API 共用同一份预算，并发请求不会各自开一份配额。限速层不改变任何 Tool Contract、Schema 或百度单批 50 目标的限制。
+
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景、Phase 9 的真实 Core Service 适配器离线验证，以及按 AK 共享的配额保护；真实模型与真实 Gateway 的完整 Agent 链路验收（Phase 10）进行中。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
