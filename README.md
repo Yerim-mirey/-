@@ -41,7 +41,11 @@ failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
 
 模型通过 `app/providers/llm.py` 的 `StructuredLLM` 接口注入。当前只提供通用接口和离线测试，不绑定模型厂商，也不发起真实 LLM 请求。选定模型服务后，具体适配器负责模型配置、结构化输出、超时及网络错误处理；`OrchestratorAgent` 无需因此改写。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway 和 Orchestrator 的离线行为；Planning、Reviewer 与 Runtime 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
+### Agent v1 Phase 4：Planning Agent
+
+`app/agents/planning.py` 使用同一个 `StructuredLLM` 接口，把需要规划的 `LifeCircleBrief` 和成功的 Diagnosis 证据包转成 `PlanningProposal`。输入必须完整，诊断指标必须覆盖所请求的设施类别；输出中的轮次、证据包 ID、设施范围和每条证据引用会经过校验。无效模型输出会失败，模型服务错误留给 Runtime。当前使用受控模型做离线测试，不调用地图 Tool，也不做新增设施的情景模拟。
+
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、Orchestrator 和 Planning 的离线行为；Reviewer 与 Runtime 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
