@@ -35,7 +35,13 @@ failure_gateway = MockToolGateway(load_contract_exchanges("failure"))
 
 接入更新版 Tool 1–6 时，让真实适配器实现同一接口，并运行 `tests/test_mock_tool_gateway.py` 中可复用的 Gateway 契约检查；无法准确映射到 v1 的语义变化需显式升级契约。Phase 2 只验证模拟交换，不代表真实百度链路验收。
 
-项目长期分层是：用户界面 / 未来 Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool 和 Agent 契约；Phase 2 提供离线 Gateway，Agent 行为与 Runtime 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
+### Agent v1 Phase 3：Orchestrator Agent
+
+`app/agents/orchestrator.py` 将用户消息转成经过 `LifeCircleBrief` 校验的任务说明。模型只提取意图、目标、地点和设施类别；诊断/规划/审查标志、三类默认设施和缺失信息由 Python 确定。空消息或无效模型输出会明确失败；模型服务错误交给后续 Runtime 处理。Orchestrator 不调用 Tool、不决定流程下一节点。
+
+模型通过 `app/providers/llm.py` 的 `StructuredLLM` 接口注入。当前只提供通用接口和离线测试，不绑定模型厂商，也不发起真实 LLM 请求。选定模型服务后，具体适配器负责模型配置、结构化输出、超时及网络错误处理；`OrchestratorAgent` 无需因此改写。
+
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway 和 Orchestrator 的离线行为；Planning、Reviewer 与 Runtime 仍待后续阶段实现。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
