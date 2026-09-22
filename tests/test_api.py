@@ -117,6 +117,99 @@ def test_invalid_body_uses_existing_failure_envelope(client, path, payload):
     assert response.json()["meta"]["schema_version"] == "1.0"
 
 
+def test_concurrent_requests_respect_one_shared_quota_budget(monkeypatch):
+    """Before the shared guard, each request got its own private budget.
+
+    FastAPI runs these sync endpoints in a threadpool, so concurrency is real.
+    The guard must throttle the *aggregate* rate: whatever the interleaving,
+    the targets granted over an elapsed interval can never exceed the budget
+    for that interval. (The guard does not serialise more than the quota
+    requires — with ample quota these calls legitimately overlap.)
+    """
+    import threading
+    import time
+
+    from app.modules.routing.service import RoutingService
+    from app.providers.baidu import quota as quota_module
+    from app.providers.baidu.live import build_live_providers
+    from app.providers.baidu.routing import BaiduRoutingProvider
+    from app.schemas.routing import RoutingRequest, RoutingSuccess
+
+    rate = 6
+    threads = 4
+    per_batch = 2
+    total = threads * per_batch
+
+    monkeypatch.setenv("BAIDU_MAP_AK", "ak-concurrency-test")
+    monkeypatch.setenv("BAIDU_ROUTES_PER_SECOND", str(rate))
+    monkeypatch.setenv("BAIDU_QUOTA_MAX_WAIT_SECONDS", "60")
+    quota_module.reset_guards()
+
+    def transport(_url, _timeout):
+        return {
+            "status": 0,
+            "result": [
+                {"distance": {"value": 100}, "duration": {"value": 80}}
+                for _ in range(per_batch)
+            ],
+        }
+
+    providers = build_live_providers("ak-concurrency-test")
+    guarded = BaiduRoutingProvider(
+        "ak-concurrency-test", transport=transport, quota_guard=providers.guard
+    )
+    completed: list[int] = []
+    lock = threading.Lock()
+
+    def request_for(index: int) -> RoutingRequest:
+        return RoutingRequest.model_validate({
+            "schema_version": "1.0",
+            "origin": {key: COORDINATE[key] for key in ("lng", "lat", "crs")},
+            "targets": [
+                {
+                    "target_id": f"t{index}-{n}",
+                    "location": {
+                        "lng": COORDINATE["lng"] + n / 1000,
+                        "lat": COORDINATE["lat"],
+                        "crs": "BD09LL",
+                    },
+                }
+                for n in range(per_batch)
+            ],
+            "travel_mode": "walking",
+        })
+
+    start = threading.Barrier(threads)
+
+    def worker(request: RoutingRequest) -> None:
+        start.wait()
+        result = RoutingService(guarded).route(request)
+        assert isinstance(result.root, RoutingSuccess), result.root
+        with lock:
+            completed.append(result.root.data.summary.requested)
+
+    started = time.monotonic()
+    workers = [
+        threading.Thread(target=worker, args=(request_for(index),))
+        for index in range(threads)
+    ]
+    for thread in workers:
+        thread.start()
+    for thread in workers:
+        thread.join(timeout=30)
+    elapsed = time.monotonic() - started
+
+    assert completed == [per_batch] * threads
+    granted = providers.guard.granted_routes
+    assert granted == total
+    # Allow the full first window plus a scheduling grace period.
+    budget = rate * (elapsed + 1.0)
+    assert granted <= budget, (
+        f"并发请求共放行 {granted} 个目标，超出 {elapsed:.2f}s 内的配额上界 {budget:.1f}"
+    )
+    quota_module.reset_guards()
+
+
 def test_unexpected_runner_error_is_sanitized(client):
     def broken(_):
         raise RuntimeError("test-secret-do-not-return")

@@ -61,19 +61,24 @@ def test_three_route_requests_fit_in_one_window():
     assert snapshot(guard).granted_routes == 3
 
 
-def test_single_request_never_bursts_the_whole_window():
-    """One batch must not spend the whole second's budget in a single instant.
+def test_small_requests_are_not_throttled_to_one_per_second():
+    """A paid quota must buy throughput, not one request per second.
 
-    This is the constraint that mirrors the temporary "one batch, then wait"
-    pacing the 2026-09-22 acceptance relied on. A window-only limiter would let
-    this batch fire immediately and then stall, bursting the console quota.
+    Regression: an earlier revision also forced a minimum gap between calls,
+    which capped throughput at ~1 request/second whatever the rate was set to
+    and made concurrent callers queue-jump into multi-second delays.
     """
     clock = FakeClock()
-    guard = BaiduQuotaGuard(clock=clock.monotonic, sleep=clock.sleep)
+    guard = BaiduQuotaGuard(
+        routes_per_second=100.0, window_seconds=1.0, clock=clock.monotonic, sleep=clock.sleep
+    )
 
-    guard.acquire_routes(3)
+    for _ in range(100):
+        guard.acquire_routes(1)
 
-    assert clock.now == 1_000.0
+    # 100 single-target calls exactly fill one window and need no waiting.
+    assert clock.sleeps == []
+    assert snapshot(guard).granted_routes == 100
 
 
 def test_second_batch_waits_for_the_window_to_clear():
@@ -121,12 +126,12 @@ def test_threads_are_serialized_and_fifo():
     for thread in threads:
         thread.join()
 
-    # Three grants of 3 targets each: the first is immediate, the other two
-    # wait a full window each, so the total advance is 2.0s regardless of
-    # thread scheduling.
+    # Three grants of 3 targets each: the first is immediate; the other two
+    # each wait one window for the previous grant to age out, so the total
+    # advance is 2.0s regardless of thread scheduling.
     assert len(order) == 3
     assert clock.now - 1_000.0 == pytest.approx(2.0)
-    assert all(seconds == pytest.approx(1.0) for seconds in clock.sleeps)
+    assert all(seconds > 0 for seconds in clock.sleeps)
     assert snapshot(guard).granted_routes == 9
 
 

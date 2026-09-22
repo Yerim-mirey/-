@@ -13,12 +13,17 @@ front of the HTTP call — while leaving the Tool contracts untouched:
   built for that AK queues behind the same budget;
 * the budget is counted in **route targets**, not HTTP calls, because the
   console meters destinations;
-* two constraints, both needed for the observed 3 QPS tier: at most
-  ``routes_per_second`` route targets inside any one-second window, and a
-  minimum spacing of ``1 - 1/routes_per_second`` between consecutive route
-  requests so a batch never bursts the whole window at once;
+* a rolling one-second window admits at most ``routes_per_second`` route
+  targets. That single constraint holds the average rate down: because every
+  admitted request is recorded, the cumulative total can never exceed
+  ``routes_per_second`` per elapsed second, and a batch can never be larger
+  than the whole window's budget;
 * requests wait for their turn in FIFO order and only fail once
   ``max_wait_seconds`` would be exceeded.
+
+The window is the only constraint by design. A minimum gap between consecutive
+requests would additionally throttle throughput to roughly one request per
+second whatever the configured rate, so a larger quota would buy nothing.
 
 Providers call :meth:`BaiduQuotaGuard.acquire_routes` (routes) or
 :meth:`BaiduQuotaGuard.acquire_call` (geocoding, POI) immediately before their
@@ -40,6 +45,10 @@ from dataclasses import dataclass
 DEFAULT_ROUTES_PER_SECOND = 3.0
 DEFAULT_WINDOW_SECONDS = 1.0
 DEFAULT_MAX_WAIT_SECONDS = 180.0
+# Floor for how long a *waiting* call sleeps before re-checking its turn. The
+# call that is actually admitted still sleeps exactly its remaining wait, so
+# pacing accuracy is unaffected; queued callers only need their turn to arrive.
+WAITER_TICK_SECONDS = 0.05
 
 
 class QuotaExceededError(RuntimeError):
@@ -113,7 +122,10 @@ class BaiduQuotaGuard:
                         "百度配额等待超出上限，已放弃本次调用。",
                         waited_seconds=self._clock() - started,
                     )
-                self._sleep(wait)
+                # Waiting threads sleep in longer steps than the tick that
+                # admitted them: they only need their turn to arrive, and a
+                # tight loop would spin the lock under concurrency.
+                self._sleep(max(wait, WAITER_TICK_SECONDS))
 
     def acquire_call(self) -> None:
         """Reserve one non-route call (geocoding, POI page) against the same AK."""
@@ -126,14 +138,12 @@ class BaiduQuotaGuard:
         pending = sum(count for _, count in self._grants)
         if not self._grants:
             return 0.0
-        # Constraint 1: the rolling window may not exceed the per-second budget.
-        if pending + targets > self.routes_per_second:
-            return max(0.0, self.window_seconds - (now - self._grants[0][0]))
-        # Constraint 2: keep consecutive route requests spaced out so a single
-        # batch cannot consume the entire window's budget in one burst.
-        spacing = self.window_seconds * (1.0 - 1.0 / self.routes_per_second)
-        elapsed = now - self._grants[-1][0]
-        return max(0.0, spacing - elapsed)
+        if pending + targets <= self.routes_per_second:
+            return 0.0
+        # The window is full: wait for the oldest grant to age out. Multiple
+        # batches queued inside one window therefore drain one window apart,
+        # which is what makes the rate hold over any one-second interval.
+        return max(0.0, self.window_seconds - (now - self._grants[0][0]))
 
     def _grant_locked(self, targets: int) -> None:
         self._grants.append((self._clock(), targets))
