@@ -13,12 +13,12 @@
 
 `app/agents/prompts.py` 保存 `ORCHESTRATOR_SYSTEM_PROMPT`。提示词解释五种 `AgentIntent`、三类受支持设施、地点提取边界、不可编造位置、输出字段，以及不进行任何地理计算。输入坐标必须明确为 BD09LL；其他坐标系不在本阶段偷偷转换。
 
-模型只返回四个语义字段：`intent`、`user_goal`、`location`、`facility_types`。内部 Pydantic 模型严格校验类型和额外字段。Orchestrator 从 `intent` 确定 `needs_full_diagnosis`、`needs_planning`、`needs_review`，从缺失的地点或设施类别生成 `missing_information`，固定 `schema_version="1.0"`，最后使用公共 `LifeCircleBrief` 再校验一次。
+模型只返回五个语义字段：`intent`、`user_goal`、`location`、`facility_types`、`use_standard_facilities`。内部 Pydantic 模型严格校验类型和额外字段。Orchestrator 从 `intent` 确定 `needs_full_diagnosis`、`needs_planning`、`needs_review`，从缺失的地点或设施类别生成 `missing_information`，固定 `schema_version="1.0"`，最后使用公共 `LifeCircleBrief` 再校验一次。
 
 ## 业务规则
 
 - 五种意图沿用 `AgentIntent`：设施查询、可达性查询、盲区查询、社区体检、规划分析。
-- 社区体检和规划分析未指定设施类别时，沿用 Core Diagnosis 的三类默认设施：`market`、`pharmacy`、`primary_school`。聚焦查询未指定类别时，Brief 标记缺少 `facility_types`。
+- 仅当模型明确标记 `use_standard_facilities=true`，且意图为社区体检或规划分析、没有点名设施类别时，沿用 Core Diagnosis 的三类默认设施：`market`、`pharmacy`、`primary_school`。点名不支持的设施（即使同时点名支持的设施）或聚焦查询未指定类别时标记缺少 `facility_types`；标记与意图或已提取类别冲突时拒绝模型输出。
 - 所有意图都需要地点；未提供地点时标记缺少 `location`。Orchestrator 不自行地理编码。
 - 重复设施类别按首次出现顺序去重。Intent 对应的三个工作标志由 Python 派生，不能由模型控制。
 - 空白用户消息在调用模型前拒绝。模型输出缺字段、类型错误、未知类别或其他契约错误时抛出不含原始输出的 `OrchestratorOutputError`；模型服务异常原样上抛，由后续 Runtime 处理。Orchestrator 不重试。

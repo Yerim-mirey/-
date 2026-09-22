@@ -24,12 +24,13 @@ class RecordingLLM:
         return self.output
 
 
-def extraction(intent="planning_analysis", location=ADDRESS, facility_types=None):
+def extraction(intent="planning_analysis", location=ADDRESS, facility_types=None, use_standard_facilities=False):
     return {
         "intent": intent,
         "user_goal": "体检社区并提出设施改善建议",
         "location": location,
         "facility_types": ["market", "pharmacy", "primary_school"] if facility_types is None else facility_types,
+        "use_standard_facilities": use_standard_facilities,
     }
 
 
@@ -46,7 +47,7 @@ def test_orchestrator_returns_valid_brief_and_sends_only_semantic_schema():
     system_prompt, user_message, schema = llm.calls[0]
     assert system_prompt
     assert user_message == "请体检我的社区并提出建议"
-    assert set(schema["properties"]) == {"intent", "user_goal", "location", "facility_types"}
+    assert set(schema["properties"]) == {"intent", "user_goal", "location", "facility_types", "use_standard_facilities"}
 
 
 @pytest.mark.parametrize(
@@ -66,7 +67,7 @@ def test_intent_determines_flags_in_python(intent, flags):
 
 @pytest.mark.parametrize("intent", ["community_diagnosis", "planning_analysis"])
 def test_broad_request_uses_core_diagnosis_facility_defaults(intent):
-    brief = OrchestratorAgent(RecordingLLM(extraction(intent=intent, facility_types=[]))).create_brief("体检社区")
+    brief = OrchestratorAgent(RecordingLLM(extraction(intent=intent, facility_types=[], use_standard_facilities=True))).create_brief("体检社区")
     assert [item.value for item in brief.facility_types] == ["market", "pharmacy", "primary_school"]
     assert brief.missing_information == []
 
@@ -126,3 +127,32 @@ def test_orchestrator_does_not_open_network_connection(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", blocked)
     monkeypatch.setattr(socket.socket, "connect", blocked)
     OrchestratorAgent(RecordingLLM(extraction())).create_brief("体检社区")
+
+
+@pytest.mark.parametrize("user_message", ["体检社区医院可达性", "体检社区医院和药店可达性"])
+def test_broad_request_with_unsupported_named_facility_asks_clarification(user_message):
+    payload = extraction(intent="community_diagnosis", facility_types=[])
+    payload["use_standard_facilities"] = False
+    brief = OrchestratorAgent(RecordingLLM(payload)).create_brief(user_message)
+    assert brief.facility_types == []
+    assert [item.field for item in brief.missing_information] == [BriefMissingField.FACILITY_TYPES]
+
+
+def test_model_must_explicitly_select_standard_facility_scope():
+    payload = extraction(intent="community_diagnosis", facility_types=[])
+    payload["use_standard_facilities"] = True
+    brief = OrchestratorAgent(RecordingLLM(payload)).create_brief("做完整社区体检")
+    assert [item.value for item in brief.facility_types] == ["market", "pharmacy", "primary_school"]
+
+
+@pytest.mark.parametrize(
+    ("intent", "facility_types"),
+    [
+        ("facility_query", []),
+        ("planning_analysis", ["market"]),
+    ],
+)
+def test_inconsistent_standard_scope_is_rejected(intent, facility_types):
+    payload = extraction(intent=intent, facility_types=facility_types, use_standard_facilities=True)
+    with pytest.raises(OrchestratorOutputError):
+        OrchestratorAgent(RecordingLLM(payload)).create_brief("查询设施")

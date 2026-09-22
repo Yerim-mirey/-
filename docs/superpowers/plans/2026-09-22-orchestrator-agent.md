@@ -4,7 +4,7 @@
 
 **Goal:** Convert a user message into a validated `LifeCircleBrief` through an injected structured LLM.
 
-**Architecture:** The LLM returns only semantic extraction fields. Python derives workflow flags, facility defaults, and missing-information records, then validates the public Agent v1 contract.
+**Architecture:** The LLM returns five semantic extraction fields, including an explicit standard-facility-scope flag. Python derives workflow flags, facility defaults, and missing-information records, then validates the public Agent v1 contract.
 
 **Tech Stack:** Python 3.12, Pydantic v2, pytest; no new runtime dependency.
 
@@ -25,7 +25,7 @@
 
 **Interfaces:** `StructuredLLM.generate_object(*, system_prompt: str, user_message: str, response_schema: dict) -> Mapping[str, object]`; `ORCHESTRATOR_SYSTEM_PROMPT`.
 
-- [ ] Write a failing Orchestrator test with a fake `StructuredLLM` that records user text and returns the four extraction fields. Run focused pytest and confirm the new modules are absent.
+- [ ] Write a failing Orchestrator test with a fake `StructuredLLM` that records user text and returns the five extraction fields. Run focused pytest and confirm the new modules are absent.
 - [ ] Add the Protocol and the prompt, then rerun the focused test. It must now fail only because Orchestrator behavior is absent.
 
 ### Task 2: Brief Construction
@@ -34,7 +34,7 @@
 
 **Interfaces:** `OrchestratorAgent(llm: StructuredLLM).create_brief(user_message: str) -> LifeCircleBrief`; `OrchestratorOutputError` for invalid model output.
 
-- [ ] Add tests for all five intent flags, missing location, focused-query missing facility types, full-diagnosis defaults, duplicate facilities, blank input, invalid model output, and provider exception propagation.
+- [ ] Add tests for all five intent flags, missing location, focused-query missing facility types, explicit full-diagnosis defaults, unsupported named facilities, duplicate facilities, blank input, invalid model output, and provider exception propagation.
 - [ ] Run focused pytest and inspect the expected RED failures.
 - [ ] Add a strict internal extraction model, derive flags and missing records, validate `LifeCircleBrief`, and wrap only model-output validation errors.
 - [ ] Run focused pytest until every new behavior passes.

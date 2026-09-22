@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from app.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 from app.providers.llm import StructuredLLM
@@ -23,6 +23,15 @@ class _SemanticExtraction(ContractModel):
     user_goal: str = Field(min_length=1)
     location: LocationInput | None
     facility_types: list[Annotated[FacilityType, Field(strict=False)]]
+    use_standard_facilities: bool
+
+    @model_validator(mode="after")
+    def standard_scope_is_unambiguous(self) -> "_SemanticExtraction":
+        if self.use_standard_facilities and (
+            self.facility_types or self.intent not in {AgentIntent.COMMUNITY_DIAGNOSIS, AgentIntent.PLANNING_ANALYSIS}
+        ):
+            raise ValueError("Standard facility scope requires a broad request without named facility types")
+        return self
 
 
 class OrchestratorAgent:
@@ -42,10 +51,7 @@ class OrchestratorAgent:
         try:
             extraction = _SemanticExtraction.model_validate(raw)
             facilities = list(dict.fromkeys(extraction.facility_types))
-            if not facilities and extraction.intent in {
-                AgentIntent.COMMUNITY_DIAGNOSIS,
-                AgentIntent.PLANNING_ANALYSIS,
-            }:
+            if extraction.use_standard_facilities:
                 facilities = list(FacilityType)
             missing = []
             if extraction.location is None:
