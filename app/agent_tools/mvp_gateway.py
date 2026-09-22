@@ -7,7 +7,9 @@ from app.modules.location.service import Geocode, resolve_location
 from app.modules.poi.service import POIService
 from app.modules.routing.service import RoutingService
 from app.providers.baidu.geocoding import BaiduGeocodingProvider
+from app.providers.baidu.live import build_live_providers
 from app.providers.baidu.poi import BaiduPOIProvider
+from app.providers.baidu.quota import BaiduQuotaGuard
 from app.providers.baidu.routing import BaiduRoutingProvider
 from app.schemas.blindspot import BlindspotRequest, BlindspotResult
 from app.schemas.diagnosis import DiagnosisRequest, DiagnosisResult
@@ -34,15 +36,32 @@ class MVPToolGateway:
 
     @classmethod
     def from_baidu_ak(cls, ak: str) -> "MVPToolGateway":
-        """Build live providers without issuing a network request."""
-        if not isinstance(ak, str) or not ak.strip():
-            raise ValueError("百度服务端 AK 不能为空。")
-        key = ak.strip()
+        """Build live providers without issuing a network request.
+
+        All three providers share one per-AK quota guard, so concurrent runs on
+        the same key queue behind the same console quota instead of each
+        getting a private budget.
+        """
+        providers = build_live_providers(ak)
         return cls(
-            geocode=BaiduGeocodingProvider(key).geocode,
-            poi_provider=BaiduPOIProvider(ak=key),
-            routing_provider=BaiduRoutingProvider(key),
+            geocode=providers.geocoding.geocode,
+            poi_provider=providers.poi,
+            routing_provider=providers.routing,
         )
+
+    @property
+    def routing_provider(self) -> BaiduRoutingProvider:
+        return self._routing.provider
+
+    @property
+    def quota_guard(self) -> BaiduQuotaGuard | None:
+        """The shared guard, when this gateway was built from a Baidu AK."""
+        return self.routing_provider.quota_guard
+
+    @property
+    def routing_batch_size(self) -> int:
+        """Route targets per request, bounded by the shared quota window."""
+        return self._routing.batch_size
 
     def resolve_location(self, request: LocationRequest) -> LocationResult:
         return resolve_location(request, geocode=self._geocode)

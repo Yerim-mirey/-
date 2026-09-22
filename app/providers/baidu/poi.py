@@ -13,6 +13,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from app.providers.baidu.quota import BaiduQuotaGuard, QuotaExceededError
+from app.providers.baidu.quota_errors import QUOTA_MESSAGE
 from app.schemas.common import CenterPoint
 
 
@@ -52,6 +54,7 @@ class BaiduPOIProvider:
         timeout: float = 10.0,
         http_get: Callable[..., Any] | None = None,
         endpoint: str = API_URL,
+        quota_guard: BaiduQuotaGuard | None = None,
     ) -> None:
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a positive finite number")
@@ -59,6 +62,11 @@ class BaiduPOIProvider:
         self._timeout = timeout
         self._http_get = http_get
         self._endpoint = endpoint
+        self._quota_guard = quota_guard
+
+    @property
+    def quota_guard(self) -> BaiduQuotaGuard | None:
+        return self._quota_guard
 
     def search(
         self, keyword: str, center: CenterPoint, radius_m: int
@@ -75,6 +83,13 @@ class BaiduPOIProvider:
 
         pois: list[ProviderPOI] = []
         for page_num in range(self.MAX_PAGES):
+            if self._quota_guard is not None:
+                try:
+                    self._quota_guard.acquire_call()
+                except QuotaExceededError:
+                    raise POIProviderError(
+                        "RATE_LIMITED", QUOTA_MESSAGE, True
+                    ) from None
             params = {
                 "query": keyword,
                 "location": f"{lat},{lng}",

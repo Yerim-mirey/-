@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -60,23 +61,26 @@ def test_address_location_without_ak_is_a_contract_failure(client):
 
 def test_address_location_uses_geocoding_provider_without_leaking_ak(client, monkeypatch):
     monkeypatch.setenv("BAIDU_MAP_AK", "test-secret-do-not-return")
+    seen = {}
 
     class FakeGeocoder:
-        def __init__(self, ak):
-            assert ak == "test-secret-do-not-return"
-
         def geocode(self, query, city):
             assert (query, city) == ("同济大学", "上海市")
             return GeocodingMatch(
                 center=CenterPoint(lng=121.506123, lat=31.282456, crs="BD09LL"), label=query,
             )
 
-    monkeypatch.setattr(api, "BaiduGeocodingProvider", FakeGeocoder)
+    def fake_build(ak):
+        seen["ak"] = ak
+        return SimpleNamespace(geocoding=FakeGeocoder())
+
+    monkeypatch.setattr(api, "build_live_providers", fake_build)
     response = client.post("/api/v1/location/resolve", json={
         "schema_version": "1.0", "input": {"type": "address", "query": "同济大学", "city": "上海市"},
     })
     assert response.status_code == 200
     assert LocationResult.model_validate(response.json()).root.data.label == "同济大学"
+    assert seen["ak"] == "test-secret-do-not-return"
     assert "test-secret-do-not-return" not in response.text
 
 

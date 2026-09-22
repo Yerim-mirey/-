@@ -3,7 +3,7 @@
 import time
 from collections.abc import Callable
 
-from app.modules.routing.batching import iter_batches
+from app.modules.routing.batching import WALKING_MATRIX_MAX_ROUTES, iter_batches
 from app.providers.baidu.routing import (
     BaiduRoutingError,
     BaiduRoutingProvider,
@@ -35,6 +35,7 @@ class RoutingService:
         max_retries: int = 1,
         retry_delay_seconds: float = 0.25,
         sleep: Callable[[float], None] = time.sleep,
+        batch_size: int | None = None,
     ) -> None:
         if max_retries < 0 or retry_delay_seconds < 0:
             raise ValueError("重试次数和延迟不能为负数。")
@@ -42,13 +43,20 @@ class RoutingService:
         self.max_retries = max_retries
         self.retry_delay_seconds = retry_delay_seconds
         self.sleep = sleep
+        # A provider behind a shared quota guard only admits batches that fit
+        # inside one quota window, so ask it instead of assuming 50.
+        if batch_size is None:
+            batch_size = getattr(provider, "max_batch_routes", WALKING_MATRIX_MAX_ROUTES)
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("batch_size 必须是正整数。")
+        self.batch_size = min(batch_size, WALKING_MATRIX_MAX_ROUTES)
 
     def route(self, request: RoutingRequest) -> RoutingResult:
         routes: list[RouteResult] = []
         first_error: BaiduRoutingError | None = None
         successful_batches = 0
 
-        for batch in iter_batches(request.targets):
+        for batch in iter_batches(request.targets, self.batch_size):
             try:
                 provider_routes = self._route_batch(request, batch)
             except BaiduRoutingError as exc:

@@ -16,9 +16,7 @@ from app.modules.isochrone.service import IsochroneService
 from app.modules.location.service import resolve_location
 from app.modules.poi.service import POIService
 from app.modules.routing.service import RoutingService
-from app.providers.baidu.geocoding import BaiduGeocodingProvider
-from app.providers.baidu.poi import BaiduPOIProvider
-from app.providers.baidu.routing import BaiduRoutingProvider
+from app.providers.baidu.live import build_live_providers
 from app.schemas.common import Meta
 from app.schemas.diagnosis import DiagnosisFailure, DiagnosisRequest, DiagnosisResult
 from app.schemas.location import LocationFailure, LocationRequest, LocationResult
@@ -30,7 +28,7 @@ DiagnosisRunner = Callable[[DiagnosisRequest], DiagnosisResult]
 
 def get_location_runner() -> LocationRunner:
     ak = os.environ.get("BAIDU_MAP_AK", "").strip()
-    geocode = BaiduGeocodingProvider(ak).geocode if ak else None
+    geocode = build_live_providers(ak).geocoding.geocode if ak else None
     return partial(resolve_location, geocode=geocode)
 
 
@@ -38,11 +36,15 @@ def get_diagnosis_runner() -> DiagnosisRunner:
     ak = os.environ.get("BAIDU_MAP_AK", "").strip()
     if not ak:
         return lambda _request: _diagnosis_failure("ISOCHRONE_FAILED", "百度服务端 AK 未配置。")
-    routing = RoutingService(BaiduRoutingProvider(ak))
+    # Geocoding, POI and routing share one per-AK quota guard, so concurrent
+    # HTTP requests queue behind the same console quota instead of each
+    # request creating its own private budget.
+    providers = build_live_providers(ak)
+    routing = RoutingService(providers.routing)
     return partial(
         diagnose,
-        resolve_location=get_location_runner(),
-        search_pois=POIService(BaiduPOIProvider(ak=ak)).search,
+        resolve_location=partial(resolve_location, geocode=providers.geocoding.geocode),
+        search_pois=POIService(providers.poi).search,
         route=routing.route,
         generate_isochrone=IsochroneService(routing.route).generate,
         analyze_blindspots=analyze_blindspots,

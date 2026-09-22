@@ -13,6 +13,8 @@ from urllib.request import urlopen
 
 from pydantic import ValidationError
 
+from app.providers.baidu.quota import BaiduQuotaGuard, QuotaExceededError
+from app.providers.baidu.quota_errors import QUOTA_MESSAGE
 from app.schemas.common import CenterPoint
 from app.schemas.location import LocationErrorCode
 
@@ -48,6 +50,7 @@ class BaiduGeocodingProvider:
         *,
         timeout_seconds: float = 5.0,
         transport: Transport | None = None,
+        quota_guard: BaiduQuotaGuard | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("百度服务端 AK 不能为空。")
@@ -56,8 +59,20 @@ class BaiduGeocodingProvider:
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
         self._transport = transport or _get_json
+        self._quota_guard = quota_guard
+
+    @property
+    def quota_guard(self) -> BaiduQuotaGuard | None:
+        return self._quota_guard
 
     def geocode(self, query: str, city: str | None = None) -> GeocodingMatch:
+        if self._quota_guard is not None:
+            try:
+                self._quota_guard.acquire_call()
+            except QuotaExceededError:
+                raise BaiduGeocodingError(
+                    "RATE_LIMITED", QUOTA_MESSAGE, retryable=True
+                ) from None
         params = {
             "address": query,
             "ak": self._api_key,

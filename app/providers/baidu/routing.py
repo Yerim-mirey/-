@@ -12,6 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+from app.providers.baidu.quota import BaiduQuotaGuard, QuotaExceededError
+from app.providers.baidu.quota_errors import QUOTA_MESSAGE
 from app.schemas.common import CenterPoint
 
 
@@ -40,6 +42,7 @@ class BaiduRoutingProvider:
         *,
         timeout_seconds: float = 8.0,
         transport: Transport | None = None,
+        quota_guard: BaiduQuotaGuard | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("百度服务端 AK 不能为空。")
@@ -48,6 +51,18 @@ class BaiduRoutingProvider:
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
         self._transport = transport or _get_json
+        self._quota_guard = quota_guard
+
+    @property
+    def quota_guard(self) -> BaiduQuotaGuard | None:
+        return self._quota_guard
+
+    @property
+    def max_batch_routes(self) -> int:
+        """Batch ceiling for this provider, including the shared quota budget."""
+        if self._quota_guard is None:
+            return MAX_ROUTES
+        return min(MAX_ROUTES, self._quota_guard.max_batch_routes)
 
     def route_matrix(
         self, origin: CenterPoint, destinations: Sequence[CenterPoint]
@@ -58,6 +73,13 @@ class BaiduRoutingProvider:
                 "单批步行目标数必须在 1 到 50 之间。",
                 retryable=False,
             )
+        if self._quota_guard is not None:
+            try:
+                self._quota_guard.acquire_routes(len(destinations))
+            except QuotaExceededError:
+                raise BaiduRoutingError(
+                    "RATE_LIMITED", QUOTA_MESSAGE, retryable=True
+                ) from None
         params = {
             "origins": _format_point(origin),
             "destinations": "|".join(_format_point(point) for point in destinations),
