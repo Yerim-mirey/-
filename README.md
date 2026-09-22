@@ -84,7 +84,9 @@ set -a; source .env; set +a
 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_llm_live.py
 ```
 
-该脚本恰好发出 3 次请求（每个角色一次），只打印公开摘要，不含密钥、原始提示词或完整模型输出。它验证的是**输出符合公共 Schema**，不是回答质量；真实模型质量评测属于 Phase 10。默认测试完全离线：`tests/test_deepseek_provider.py` 用注入的 `httpx.MockTransport` 断言请求载荷与全部失败分支，真实调用被 `RUN_DEEPSEEK_SMOKE=1` 与 `DEEPSEEK_API_KEY` 双重门控。
+该脚本每轮恰好发出 3 次请求（每个角色一次），只打印公开摘要，不含密钥、原始提示词或完整模型输出。可用 `RUN_DEEPSEEK_SMOKE_ROUNDS`（上限 5）跑多轮以观察稳定性。它验证的是**输出符合公共 Schema 与确定性引用校验**，不是回答质量；真实语义质量评测属于 Phase 10。
+
+思考模式默认关闭：DeepSeek 的 reasoning tokens 计入 `max_tokens`，结构化抽取的输出很小，开启思考会把预算耗尽并导致 JSON 截断（首次真实调用即遇到）。需要时可用 `thinking=True` 或 `DEEPSEEK_THINKING=1` 开启；命中 `max_tokens` 会抛 `LLMOutputTruncated`，与格式错误明确区分。真实调用观测见 `docs/test-report/phase10-prep-deepseek-adapter-2026-09-22.md`。默认测试完全离线：`tests/test_deepseek_provider.py` 用注入的 `httpx.MockTransport` 断言请求载荷与全部失败分支，真实调用被 `RUN_DEEPSEEK_SMOKE=1` 与 `DEEPSEEK_API_KEY` 双重门控。
 
 项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、可运行的 Graph 与 Runner，以及离线端到端场景矩阵；真实 MVP Gateway（Phase 9）与真实模型/百度链路（Phase 10）仍待后续阶段。详见 `docs/architecture/core-mvp.md`。
 

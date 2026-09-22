@@ -13,6 +13,7 @@ from app.providers.deepseek import (
     API_KEY_ENV,
     DEFAULT_MODEL,
     DeepSeekLLM,
+    LLMOutputTruncated,
     LLMResponseError,
     LLMTransportError,
     api_key_from_env,
@@ -38,7 +39,10 @@ def recording_client(*, status_code=200, body=None, raise_error=None, headers=No
         if payload is None:
             payload = {
                 "model": DEFAULT_MODEL,
-                "choices": [{"message": {"role": "assistant", "content": '{"answer": "ok"}'}}],
+                "choices": [{
+                    "message": {"role": "assistant", "content": '{"answer": "ok"}'},
+                    "finish_reason": "stop",
+                }],
                 "usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
             }
         return httpx.Response(status_code, json=payload)
@@ -73,12 +77,66 @@ def test_request_carries_schema_instruction_and_json_mode():
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["stream"] is False
     assert payload["max_tokens"] > 0
+    assert payload["thinking"] == {"type": "disabled"}, "结构化抽取必须留足 JSON 输出预算"
     assert payload["messages"][1] == {"role": "user", "content": "请回答"}
     system = payload["messages"][0]["content"]
     assert system.startswith("你是测试角色。")
     assert "json" in system.lower(), "DeepSeek 的 JSON 模式要求提示词包含 json 字样"
     assert json.dumps(SCHEMA, ensure_ascii=False, indent=2) in system, "必须给出格式示例"
     assert adapter(client).last_usage is None
+
+
+def test_thinking_mode_is_opt_in(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_THINKING", raising=False)
+    client, requests = recording_client()
+    adapter(client, thinking=True).generate_object(
+        system_prompt="角色", user_message="问题", response_schema=SCHEMA
+    )
+    assert sent_payload(requests)["thinking"] == {"type": "enabled"}
+
+    monkeypatch.setenv("DEEPSEEK_THINKING", "1")
+    client, requests = recording_client()
+    adapter(client).generate_object(
+        system_prompt="角色", user_message="问题", response_schema=SCHEMA
+    )
+    assert sent_payload(requests)["thinking"] == {"type": "enabled"}
+
+    monkeypatch.setenv("DEEPSEEK_THINKING", "0")
+    client, requests = recording_client()
+    adapter(client, thinking=True).generate_object(
+        system_prompt="角色", user_message="问题", response_schema=SCHEMA
+    )
+    assert sent_payload(requests)["thinking"] == {"type": "disabled"}
+
+
+def test_truncated_completion_is_reported_as_truncation():
+    """Thinking tokens share the max_tokens budget, so length must be explicit."""
+    client, _ = recording_client(body={
+        "model": DEFAULT_MODEL,
+        "choices": [{
+            "message": {"content": "", "reasoning_content": "思考中…"},
+            "finish_reason": "length",
+        }],
+        "usage": {"completion_tokens": 8192},
+    })
+    with pytest.raises(LLMOutputTruncated, match="max_tokens"):
+        adapter(client).generate_object(
+            system_prompt="角色", user_message="问题", response_schema=SCHEMA
+        )
+
+
+def test_partial_json_on_a_length_finish_is_reported_as_truncation():
+    client, _ = recording_client(body={
+        "model": DEFAULT_MODEL,
+        "choices": [{
+            "message": {"content": '{"answer": "cut off'},
+            "finish_reason": "length",
+        }],
+    })
+    with pytest.raises(LLMOutputTruncated, match="incomplete"):
+        adapter(client).generate_object(
+            system_prompt="角色", user_message="问题", response_schema=SCHEMA
+        )
 
 
 def test_client_and_environment_configuration(monkeypatch):
@@ -92,6 +150,7 @@ def test_client_and_environment_configuration(monkeypatch):
     assert str(requests[0].url) == "https://example.test/v1/chat/completions"
     assert model.last_usage["model"] == DEFAULT_MODEL
     assert model.last_usage["usage"]["total_tokens"] == 16
+    assert model.last_usage["finish_reason"] == "stop"
 
 
 def test_api_key_comes_from_the_environment(monkeypatch):

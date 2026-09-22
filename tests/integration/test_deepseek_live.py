@@ -12,7 +12,8 @@ from scripts.verify_agent_llm_live import main
     reason="需要 RUN_DEEPSEEK_SMOKE=1 和 DEEPSEEK_API_KEY",
 )
 def test_real_deepseek_roles_return_contract_valid_output(capsys) -> None:
-    assert main() == 0
+    exit_code = main()
     output = capsys.readouterr().out
-    assert "RESULT: all three roles produced contract-valid output" in output
+    assert "RESULT:" in output
     assert os.environ["DEEPSEEK_API_KEY"] not in output, "报告不得包含 API key"
+    assert exit_code == 0, "真实模型至少有一次输出不符合公共契约，请查看上面的拒绝原因"
