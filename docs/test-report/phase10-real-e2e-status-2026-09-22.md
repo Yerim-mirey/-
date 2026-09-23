@@ -1,6 +1,6 @@
-# Agent Phase 10 进展与未完成记录（2026-09-22）
+# Agent Phase 10 真实链路验收记录（2026-09-22 / 实测 2026-09-23）
 
-> **状态：未通过，不得标为完成。** 真实百度链路尚未执行——本机 `.env` 的 `BAIDU_MAP_AK` 为空，且出口 IP 白名单未核对。本文记录已完成的 Phase 10 基础设施、一次真实模型诊断的结论，以及把 Phase 10 收尾所需的确切步骤。完成真实链路后须更新本文，而不是另写一份“通过”报告覆盖它。
+> **状态：真实链路已跑通，Phase 10 尚未全部达标。** 真实 DeepSeek + 真实百度经实际 `MVPToolGateway` 与 `run_agent` 已跑完固定案例矩阵：四类案例全部到达预期终态，其中含完整体检的规划案例耗时 528 秒、消费 1465 个算路目标并取得 Reviewer `approved`。但退出条件仍有 2 项未满足：真实语义质量只做了**一次**人工检查（样本不足以支撑结论），且模型侧出现了两次可复现的传输层失败。本文按第 6 节逐项交代。
 
 ## 1. 代码版本与范围
 
@@ -66,6 +66,40 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 
 每条案例除终态外还核对：`completion_mode`、Brief 的意图/设施/缺失字段、Evidence 中**每个 `EvidenceRef.json_pointer` 都能在 bundle 内解析**、Proposal 的 `evidence_bundle_id` 与引用集合、Review 与被审 Proposal 的身份与轮次绑定、`waiting_for_input` 必须零取证。`--report` 写出机器可读结果，AK 与模型密钥都会被替换。
 
+## 2.5 真实链路实测结果（2026-09-23）
+
+运行条件：`feat/mvp-tool-gateway` @ `6f5e4bf`；模型 `deepseek-flash`；`BAIDU_ROUTES_PER_SECOND=3`、窗口 1s、最大单批 3、最长等待 180s；出口 IP 已加入百度白名单。运行命令：
+
+```bash
+set -a; source .env; set +a
+RUN_BAIDU_SMOKE=1 python -m scripts.verify_agent_live_e2e probe
+RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_live_e2e acceptance --include-diagnosis \
+  --report data/cache/phase10-acceptance-full.json
+```
+
+| 案例 | 终态 | 意图 | 证据引用 | 算路目标 | 时长 | 判定 |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| `poi-address`（地址） | `completed` / normal | `facility_query` | 29（location+poi） | 13 | 5.1s | **PASS** |
+| `walk-time-coordinate`（坐标） | `completed` / normal | `accessibility_query` | 17（location+poi+routing） | 14 | 6.0s | **PASS** |
+| `planning-coordinate`（坐标+规划） | `completed` / **normal** | `planning_analysis` | 3（diagnosis） | **1465** | **528.5s** | **PASS**（规划轮次 1，Reviewer `approved`） |
+| `missing-location`（缺地点） | `waiting_for_input` | `facility_query` | 0 | 0 | 0.9s | **PASS**（零取证、列出缺失字段） |
+
+`probe` 返回 `PROBE OK`，地理编码解析出四川北路街道真实坐标 `(121.492506, 31.268909)`。
+
+**限流有效性（退出条件之一）：** 规划案例共放行 1465 个算路目标、耗时 528.5 秒，即 **2.77 目标/秒**，低于 3 目标/秒的配额；全程未触发 `RATE_LIMITED`，最大单批为 3。这证明共享守卫在真实运行条件下确实生效。
+
+**证据追踪：** 三个成功案例的**每一条** `EvidenceRef.json_pointer` 都在其 bundle 内解析成功。坐标案例 23 条引用（location 1 + poi 11 + routing 11）全部通过；规划案例的 Proposal 与 Review 均绑定当前 bundle，Reviewer 返回 `approved`。
+
+**规划案例的 warnings（必须并列记录）：** `PARTIAL_DIAGNOSIS`、`PARTIAL_POI_RESULTS`、`BLINDSPOT_UNAVAILABLE`、`NO_ROUTE_FOR_TARGETS`，且 `completion_mode` 仍为 `normal`。按契约这**不是矛盾**——交接文件明确 `completed` 只代表程序走到终态、不自动证明回答充分，而 `mode` 目前只反映规划工作流的 Review 结论、不反映证据完整度。但这意味着两种截然不同的运行会得到同一个 `mode=normal`：事实完整的，和事实不完整的。**消费者不能把 `mode=normal` 读作“证据完整”。** 该缺口已记录为待决设计项（见第 6 节），本文不擅自改动冻结语义。
+
+**模型侧传输层失败（两次，可复现）：** 为核对上述 warnings 的内部事实，同一案例被重跑两次，两次都在证据取得之前失败：
+
+- 一次 `status=failed`、`errors=[UNEXPECTED_ERROR]`，消息为 `DeepSeek request failed: The read operation timed out`（Orchestrator 首次调用即超时，`brief` 为 `None`，`tool_retry_count=0`）；
+- 另一次长时间无返回，被主动终止。
+
+根因是结构性的：适配器默认 `timeout_seconds=60`，而 Runner **只对 Tool 失败消耗重试预算，对模型失败不重试**，因此一次模型超时会让整个 Run 以 `failed` 终止。对受控单用户演示是可接受的，但意味着真实链路的可用性受模型服务抖动影响。已列入第 6 节待办，未在本次改动。
+
+
 ## 3. 真实模型侧结论（已执行）
 
 ### 3.1 此前那次“未定位的 Planning 校验拒绝”已定位
@@ -123,44 +157,50 @@ Orchestrator 的意图归类与输入的 6 条消息轮转一致：`facility_que
 - **未覆盖真实全链路**：三 Agent 之间仍由固定夹具驱动，没有经过真实 Gateway、真实 Diagnosis 或多轮回路的联合运行。
 - 诊断输出只保留字段路径与身份形状（如 `diagnosis:<other>`），不含模型原文、标识符与提示词。
 
-## 4. 阻塞项与收尾步骤
+## 4. 复现条件与待办
 
-### 4.1 当前阻塞
+### 4.1 环境前置（已解决，记录以备复现）
 
-1. **`BAIDU_MAP_AK` 为空**：本机 `.env` 第 2 行只有变量名，值为空（长度 0）。`probe` 因此输出 `SKIPPED: BAIDU_MAP_AK 未配置。`
-2. **出口 IP 白名单未核对**：本机出口并非单一 IP，观察到同一 `/24` 段内的 `103.155.100.100` 与 `103.155.100.96`。百度 Web Service 的白名单在所有接口上统一生效，未生效时地理编码、POI、批量算路会**全部**失败——这也是先跑 `probe` 的原因。
+1. **`BAIDU_MAP_AK`**：本机 `.env` 第 2 行原先为空，已填入服务端 AK。**该 AK 曾以明文出现在协作对话中，验收后应轮换**；轮换只需改 `.env` 一行，代码无需改动。
+2. **出口 IP 白名单**：曾观察到两类出口。开启代理时为 `103.155.100.0/24` 段内的地址池（采样到 8 个不同 IP，逐个加白名单不可行）；关闭代理后为单一固定地址 `36.113.103.187`，已加入百度控制台白名单。未加白名单时百度返回 HTTP 200 + `status=210`（`APP IP 校验失败`）——该错误现在会被三个 Provider 明确映射为不可重试的 `INVALID_REQUEST`，不再伪装成通用服务故障。
+3. 家宽 IP 可能因重拨/换网而改变；变化后表现与未加白名单相同（`210`）。排查顺序：`curl -s https://api.ipify.org` 看当前 IP → 更新白名单 → 重跑 `probe`。
 
-### 4.2 收尾步骤（按顺序）
+### 4.2 复现命令
 
 ```bash
 cd "/Users/liuyanhe/Desktop/15分钟生活圈智能体检与规划助手"
 set -a; source .env; set +a
 
-# 1) 一次地理编码调用：确认 AK 与白名单生效
+# 1) 1 次地理编码调用：确认 AK 与白名单生效
 RUN_BAIDU_SMOKE=1 python -m scripts.verify_agent_live_e2e probe
 
-# 2) 默认矩阵（不含完整体检，成本低）
+# 2) 默认矩阵（不含完整体检，约 15 秒）
 RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 \
   python -m scripts.verify_agent_live_e2e acceptance \
   --report data/cache/phase10-acceptance-lite.json
 
-# 3) 含完整体检的案例（约 10 分钟、上千次算路，确认配额后单独执行）
+# 3) 含完整体检的规划案例（约 9 分钟、约 1465 个算路目标）
 RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 \
   python -m scripts.verify_agent_live_e2e acceptance --include-diagnosis \
-  --only planning-coordinate --report data/cache/phase10-acceptance-diagnosis.json
+  --only planning-coordinate --report data/cache/phase10-planning.json
 ```
 
-收尾后必须回填本文：每条案例的实际终态、实际调用量与时长、`completed`/`waiting_for_input`/`with_limitations`/`failed` 的实际归属、Evidence 引用逐条追踪结果、限流是否在该运行条件下生效、人工抽样结论与全部局限。若某项失败，写明“未通过”与可复现原因。
-
-### 4.3 Phase 10 退出条件（尚未满足）
+### 4.3 Phase 10 退出条件
 
 - [x] 限速/并发保护在 Provider/执行层落地，且不污染 Tool Contract
-- [x] 离线测试与 Contract 校验通过
-- [x] 真实模型侧的 Planning 拒绝已定位
-- [ ] 真实 DeepSeek + 真实百度经实际 Gateway 与 Runner 跑通预定案例
-- [ ] 限流/超时在该真实运行条件下被证明有效
-- [ ] 结果、错误与证据引用逐项检查
-- [ ] 真实语义抽样结论与局限写入报告
+- [x] 离线测试与 Contract 校验通过（`537 passed, 4 skipped`；Contract 校验通过）
+- [x] 真实模型侧的 Planning 拒绝已定位（夹具只有一条引用所致，非模型缺陷）
+- [x] 真实 DeepSeek + 真实百度经实际 Gateway 与 Runner 跑通预定案例（四类案例全部到达预期终态，见 2.5）
+- [x] 限流在该真实运行条件下被证明有效（1465 目标 / 528.5s = 2.77 目标/秒，未触发 `RATE_LIMITED`，最大单批 3）
+- [x] 结果、错误与证据引用逐项检查（三个成功案例的每条 JSON Pointer 均解析成功；失败路径亦已记录）
+- [ ] **真实语义抽样结论**：目前只完成**一次**规划案例的人工检查样本，远不足以支撑“建议质量达标”的结论。仍需按固定评分表对不同中心/不同设施缺口重复抽样。
+
+### 4.4 已知待办（本次未改动）
+
+1. **模型失败不重试**：适配器默认 60s 超时，Runner 只对 Tool 失败消耗重试预算。一次模型超时即让整个 Run `failed`（本次实测两次）。需要决定模型层的重试/退避策略，或在 API 层提供任务化重试。
+2. **`completion_mode` 不反映证据完整度**：`mode=normal` 同时覆盖“事实完整”和“`PARTIAL_DIAGNOSIS`”两种运行。是否让不完全证据降级为 `with_limitations` 属于冻结语义的变更，需要明示决策，不能顺带修改。
+3. **语义评分表未建立**：4.3 最后一项要落地，需要一个固定的抽查量表（意图识别、设施归类、建议是否越界、Reviewer 是否漏判）。
+4. **长任务与并发**：Agent API 仍是同步执行；任务化/超时/取消未实现。
 
 ## 5. 复现与验证
 
