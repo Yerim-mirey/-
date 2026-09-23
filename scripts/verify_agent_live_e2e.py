@@ -59,6 +59,7 @@ from app.agents.planning import PlanningAgent
 from app.agents.reviewer import ReviewerAgent
 from app.providers.baidu.geocoding import BaiduGeocodingError, BaiduGeocodingProvider
 from app.providers.baidu.live import build_live_providers
+from app.providers.baidu.net import install_ipv4_only
 from app.providers.baidu.quota import snapshot
 from app.providers.deepseek import DeepSeekLLM, api_key_from_env
 from app.schemas.agent import AgentRunState, RunStatus
@@ -478,6 +479,9 @@ def run_probe() -> int:
     if not ak:
         print("SKIPPED: BAIDU_MAP_AK 未配置。")
         return 0
+    # Pin IPv4 exactly as the provider factory does, so the probe reports the
+    # same reachability the real chain will see.
+    install_ipv4_only()
     provider = BaiduGeocodingProvider(ak)
     try:
         match = provider.geocode(FIXED_ADDRESS)

@@ -22,6 +22,7 @@ import os
 from dataclasses import dataclass
 
 from app.providers.baidu.geocoding import BaiduGeocodingProvider
+from app.providers.baidu.net import install_ipv4_only
 from app.providers.baidu.poi import BaiduPOIProvider
 from app.providers.baidu.quota import (
     DEFAULT_ROUTES_PER_SECOND,
@@ -63,6 +64,10 @@ def build_live_providers(ak: str) -> LiveProviders:
     if not isinstance(ak, str) or not ak.strip():
         raise ValueError("百度服务端 AK 不能为空。")
     key = ak.strip()
+    # Pin Baidu traffic to IPv4 before any provider can open a connection: the
+    # console whitelist records IPv4 addresses, while a dual-stack host would
+    # otherwise reach Baidu over IPv6 and be refused with status 210.
+    install_ipv4_only()
     guard = guard_for_ak(
         key,
         routes_per_second=_optional_positive_float(ROUTES_PER_SECOND_ENV),

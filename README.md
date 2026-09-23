@@ -127,6 +127,23 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 
 `MVPToolGateway.from_baidu_ak(...)` 与 `app/api/main.py` 都经 `app/providers/baidu/live.py` 构造 Provider，所以 Agent 侧与 Core HTTP API 共用同一份预算，并发请求不会各自开一份配额。限速层不改变任何 Tool Contract、Schema 或百度单批 50 目标的限制。
 
+### 百度流量强制 IPv4
+
+`app/providers/baidu/live.py` 在构造 Provider 时调用 `install_ipv4_only()`，把百度流量固定到 IPv4。原因是这个故障**极难自行诊断**：
+
+- `api.map.baidu.com` 同时解析出 A 记录与 AAAA 记录，而双栈主机会**优先走 IPv6**，于是请求从 IPv6 地址发出；
+- 百度控制台的 IP 白名单只登记 **IPv4** 地址，因此即使你把 `curl https://ipinfo.io/ip` 查到的 IPv4 一字不差地加进白名单，请求仍会被拒；
+- 拒绝方式是 **HTTP 200 + `status=210`（`APP IP校验失败`）**，看起来就像"白名单没配对"，于是会一直往控制台方向排查。
+
+本机实测（同一台机器、同一 AK、只改地址族）：
+
+```text
+强制 IPv4 → status 0
+强制 IPv6 → status 210
+```
+
+`install_ipv4_only()` 通过临时替换 `socket.getaddrinfo` 过滤掉 IPv6 结果来实现，带引用计数，可嵌套、可并发，进程退出即恢复；对只有一个 AAAA 记录的主机仍会回退到原结果，不会把可达主机变成不可达。若某天白名单改为登记 IPv6，可用 `BAIDU_FORCE_IPV4=0` 关闭。
+
 ### Agent Run HTTP 入口
 
 `POST /api/v1/agent/runs` 把 Agent Runtime 暴露成 HTTP：请求体是 `AgentRunRequest`（`app/schemas/api.py`，只有 `schema_version`、`user_message`、可选 `run_id`），**响应体直接就是 `AgentRunState`**，所以 API 不会与 Runtime 各自演化出两套状态结构。
