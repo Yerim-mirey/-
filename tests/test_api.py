@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api import main as api
 from app.providers.baidu.geocoding import GeocodingMatch
+from app.schemas.agent import AgentRunState, RunStatus
 from app.schemas.common import CenterPoint
 from app.schemas.diagnosis import DiagnosisResult
 from app.schemas.location import LocationResult
@@ -235,3 +236,125 @@ def test_wildcard_cors_is_rejected(monkeypatch):
     monkeypatch.setenv("CORS_ORIGINS", "*")
     with pytest.raises(ValueError):
         api._allowed_origins()
+
+
+# --- Agent Run endpoint -----------------------------------------------------
+
+
+def test_agent_run_without_llm_key_reports_a_failed_run(client, monkeypatch):
+    """A well-formed request returns 200 with an explicit failed Run.
+
+    The deployment lacks the key, not the caller: that is a terminal Run state,
+    not an HTTP error, and it must say which key is missing.
+    """
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("BAIDU_MAP_AK", "ak-present")
+
+    response = client.post(
+        "/api/v1/agent/runs", json={"schema_version": "1.0", "user_message": "查一下菜市场"}
+    )
+
+    assert response.status_code == 200
+    state = AgentRunState.model_validate(response.json())
+    assert state.status is RunStatus.FAILED
+    assert [error.code for error in state.errors] == [api.MISSING_LLM_KEY_CODE]
+    assert state.evidence is None
+    assert state.planning_proposal is None
+
+
+def test_agent_run_without_baidu_ak_reports_a_failed_run(client, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-not-a-real-key")
+    monkeypatch.delenv("BAIDU_MAP_AK", raising=False)
+
+    response = client.post(
+        "/api/v1/agent/runs", json={"schema_version": "1.0", "user_message": "查一下菜市场"}
+    )
+
+    assert response.status_code == 200
+    state = AgentRunState.model_validate(response.json())
+    assert state.status is RunStatus.FAILED
+    assert [error.code for error in state.errors] == [api.MISSING_BAIDU_KEY_CODE]
+
+
+def test_agent_run_reports_missing_keys_without_leaking_them(client, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-secret-do-not-return")
+    monkeypatch.delenv("BAIDU_MAP_AK", raising=False)
+
+    response = client.post(
+        "/api/v1/agent/runs", json={"schema_version": "1.0", "user_message": "查一下菜市场"}
+    )
+
+    assert "sk-secret-do-not-return" not in response.text
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"schema_version": "1.0"},
+        {"schema_version": "1.0", "user_message": ""},
+        {"schema_version": "2.0", "user_message": "hi"},
+        {"schema_version": "1.0", "user_message": "hi", "run_id": "not-prefixed"},
+    ],
+)
+def test_agent_run_invalid_body_is_a_422(client, payload):
+    response = client.post("/api/v1/agent/runs", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_agent_run_uses_a_caller_supplied_run_id(client, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("BAIDU_MAP_AK", "ak-present")
+
+    response = client.post(
+        "/api/v1/agent/runs",
+        json={"schema_version": "1.0", "user_message": "查一下菜市场", "run_id": "run:caller-01"},
+    )
+
+    assert response.json()["run_id"] == "run:caller-01"
+
+
+def test_agent_run_generates_a_schema_valid_run_id(client, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("BAIDU_MAP_AK", "ak-present")
+
+    response = client.post(
+        "/api/v1/agent/runs", json={"schema_version": "1.0", "user_message": "查一下菜市场"}
+    )
+
+    run_id = response.json()["run_id"]
+    assert run_id.startswith("run:")
+    # The schema is the authority, so re-validating proves the format holds.
+    AgentRunState.model_validate({**response.json(), "run_id": run_id})
+
+
+def test_agent_run_failure_is_sanitized(client, monkeypatch):
+    """An unexpected runner crash must not leak its message to the caller."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-present")
+    monkeypatch.setenv("BAIDU_MAP_AK", "ak-present")
+
+    def broken(_request):
+        raise RuntimeError("test-secret-do-not-return")
+
+    api.app.dependency_overrides[api.get_agent_runner] = lambda: broken
+    response = client.post(
+        "/api/v1/agent/runs", json={"schema_version": "1.0", "user_message": "查一下菜市场"}
+    )
+
+    assert response.status_code == 200
+    assert "test-secret-do-not-return" not in response.text
+    assert response.json()["status"] == "failed"
+
+
+def test_agent_run_does_not_touch_the_network_when_misconfigured(monkeypatch):
+    """Building the runner must not open a socket, even with keys present."""
+    import socket
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-present")
+    monkeypatch.setenv("BAIDU_MAP_AK", "ak-present")
+    blocked = AssertionError("runner construction must not open a socket")
+    monkeypatch.setattr(socket.socket, "connect", lambda *_: (_ for _ in ()).throw(blocked))
+
+    runner = api.get_agent_runner()
+
+    assert callable(runner)

@@ -123,13 +123,29 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 
 `MVPToolGateway.from_baidu_ak(...)` 与 `app/api/main.py` 都经 `app/providers/baidu/live.py` 构造 Provider，所以 Agent 侧与 Core HTTP API 共用同一份预算，并发请求不会各自开一份配额。限速层不改变任何 Tool Contract、Schema 或百度单批 50 目标的限制。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景、Phase 9 的真实 Core Service 适配器离线验证，以及按 AK 共享的配额保护；真实模型与真实 Gateway 的完整 Agent 链路验收（Phase 10）进行中。详见 `docs/architecture/core-mvp.md`。
+### Agent Run HTTP 入口
+
+`POST /api/v1/agent/runs` 把 Agent Runtime 暴露成 HTTP：请求体是 `AgentRunRequest`（`app/schemas/api.py`，只有 `schema_version`、`user_message`、可选 `run_id`），**响应体直接就是 `AgentRunState`**，所以 API 不会与 Runtime 各自演化出两套状态结构。
+
+```json
+{"schema_version": "1.0", "user_message": "请体检上海市虹口区四川北路街道并给出规划建议"}
+```
+
+设计要点：
+
+- **形式正确的请求一律返回 200。** `completed`、`waiting_for_input`、`failed` 都是合法终态，靠 `status`、`completion_mode`、`errors` 区分，而不是靠 HTTP 状态码；只有请求体格式错误才返回 422。前端必须按 `status` 分支，不能把 200 当作成功。
+- `run_id` 可省略，服务端会自动生成合法的 `run:*`；客户端传入的值同样按共享 `RunId` 规则校验，格式不对就是 422 而不是 500。
+- 缺少服务端密钥时返回 `status=failed` 且 `errors[].code` 明确为 `LLM_KEY_MISSING` 或 `BAIDU_AK_MISSING`——这是部署没配好，不是调用方写错了，所以不用 5xx 表达。密钥值本身绝不进入响应。
+- 构造 runner **不发任何网络请求**；真实调用只在执行时发生，并复用上面的按 AK 配额预算。
+- 当前仍是**同步**执行：一次完整体检约需十分钟，HTTP 连接会一直挂着。这适合受控单用户演示；公网形态需要任务化（`POST` 返回 `202 + job_id`、`GET` 查询状态）与超时/取消，尚未实现，见 `API_交接说明_2026-09-22.md` 第 7.2 节。
+
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景、Phase 9 的真实 Core Service 适配器离线验证、按 AK 共享的配额保护，以及 Agent Run 的 HTTP 入口；真实模型与真实 Gateway 的完整 Agent 链路验收（Phase 10）进行中。详见 `docs/architecture/core-mvp.md`。
 
 ## 基线边界
 
-1. `app/schemas/common.py` 是公共 `CenterPoint`、`WarningItem`、`ErrorDetail`、`Meta` 的唯一来源。API 和 Web 复用现有 Tool/Schema，不另造数据结构。
+1. `app/schemas/common.py` 是公共 `CenterPoint`、`WarningItem`、`ErrorDetail`、`Meta` 的唯一来源。API 和 Web 复用现有 Tool/Schema，不另造数据结构；`app/schemas/api.py` 只描述 HTTP 入参。
 2. 原有 `demo/map-demo.template.html` 与 `LICENSE` 保留；正式 Web 尚未开发。
-3. 真实百度 AK 只放在本机 `.env`，不提交 Git；仓库只包含 `.env.example`。正式验收的 3 QPS 节奏尚未进入 API/Service，完成共享限速前不要并发运行真实完整诊断。
+3. 真实百度 AK 只放在本机 `.env`，不提交 Git；仓库只包含 `.env.example`。跨请求共享限速已落地（默认按免费版 3 目标/秒），但**长任务超时/取消与任务化仍未实现**，同步接口只适合受控单用户演示。
 
 本地测试（先安装 `requirements.txt`）：
 
@@ -149,7 +165,7 @@ set +a
 python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-浏览器访问 `http://127.0.0.1:8000/docs`。接口为 `GET /health`、`POST /api/v1/location/resolve`、`POST /api/v1/diagnosis`。两个 POST 分别使用现有 `LocationRequest/Result`、`DiagnosisRequest/Result`；请求格式错误返回 HTTP 422 与对应失败 Envelope，工具执行失败则在 Result 的 `ok=false` 中表达。没有 AK 时，坐标输入的 Location 仍可用，地址解析和 Diagnosis 会返回失败 Envelope，不会发起百度请求。
+浏览器访问 `http://127.0.0.1:8000/docs`。接口为 `GET /health`、`POST /api/v1/location/resolve`、`POST /api/v1/diagnosis`、`POST /api/v1/agent/runs`。前两个 POST 分别使用现有 `LocationRequest/Result`、`DiagnosisRequest/Result`；请求格式错误返回 HTTP 422 与对应失败 Envelope，工具执行失败则在 Result 的 `ok=false` 中表达。`agent/runs` 见上一节。没有 AK 时，坐标输入的 Location 仍可用，地址解析和 Diagnosis 会返回失败 Envelope，不会发起百度请求；`agent/runs` 会返回 `status=failed` 并注明缺少哪个密钥。
 
 开发环境 CORS 默认仅允许 `localhost:5173` 和 `127.0.0.1:5173`。正式部署时通过 `CORS_ORIGINS` 指定逗号分隔的明确来源，不允许 `*`；服务端 AK 不进入前端、API 响应或 Git。
 

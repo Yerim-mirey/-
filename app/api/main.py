@@ -1,6 +1,7 @@
-"""Minimal HTTP adapter for the existing Location and Diagnosis contracts."""
+"""HTTP adapter for the existing Core contracts and the Agent Runtime."""
 
 import os
+import uuid
 from collections.abc import Callable
 from functools import partial
 
@@ -10,6 +11,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.agent_runtime.runner import run_agent
+from app.agent_tools.mvp_gateway import MVPToolGateway
+from app.agents.orchestrator import OrchestratorAgent
+from app.agents.planning import PlanningAgent
+from app.agents.reviewer import ReviewerAgent
 from app.modules.blindspot.service import analyze_blindspots
 from app.modules.diagnosis.service import diagnose
 from app.modules.isochrone.service import IsochroneService
@@ -17,13 +23,23 @@ from app.modules.location.service import resolve_location
 from app.modules.poi.service import POIService
 from app.modules.routing.service import RoutingService
 from app.providers.baidu.live import build_live_providers
-from app.schemas.common import Meta
+from app.providers.deepseek import DeepSeekLLM, api_key_from_env
+from app.schemas.agent import AgentRunState, RunStatus
+from app.schemas.api import AgentRunRequest
+from app.schemas.common import ErrorDetail, Meta
 from app.schemas.diagnosis import DiagnosisFailure, DiagnosisRequest, DiagnosisResult
 from app.schemas.location import LocationFailure, LocationRequest, LocationResult
 
 
 LocationRunner = Callable[[LocationRequest], LocationResult]
 DiagnosisRunner = Callable[[DiagnosisRequest], DiagnosisResult]
+AgentRunner = Callable[[AgentRunRequest], AgentRunState]
+
+# Raised into the Run when the server is not configured for real Agent work.
+# It is a normal `failed` terminal state, not an HTTP error: the request was
+# well formed, the deployment simply cannot serve it.
+MISSING_LLM_KEY_CODE = "LLM_KEY_MISSING"
+MISSING_BAIDU_KEY_CODE = "BAIDU_AK_MISSING"
 
 
 def get_location_runner() -> LocationRunner:
@@ -65,6 +81,63 @@ def _diagnosis_failure(code: str, message: str) -> DiagnosisResult:
     ))
 
 
+def _run_id(request: AgentRunRequest) -> str:
+    """Honour a caller-supplied Run ID, otherwise mint one."""
+    if request.run_id:
+        return request.run_id
+    return f"run:api-{uuid.uuid4().hex[:16]}"
+
+
+def get_agent_runner() -> AgentRunner:
+    """Build the real Agent entry point, or a runner that reports why it cannot.
+
+    Construction performs no network call; the Baidu providers are built once
+    per request through the shared per-AK quota guard, so the Agent API and the
+    Core API draw from the same budget.
+    """
+    llm_key = api_key_from_env()
+    ak = os.environ.get("BAIDU_MAP_AK", "").strip()
+
+    def unavailable(code: str, message: str) -> AgentRunner:
+        def runner(request: AgentRunRequest) -> AgentRunState:
+            return AgentRunState(
+                schema_version="1.0",
+                run_id=_run_id(request),
+                status=RunStatus.FAILED,
+                completion_mode=None,
+                user_message=request.user_message,
+                brief=None,
+                evidence=None,
+                planning_proposal=None,
+                review_result=None,
+                planning_round=0,
+                tool_retry_count=0,
+                warnings=[],
+                errors=[ErrorDetail(code=code, message=message, retryable=False)],
+            )
+        return runner
+
+    if llm_key is None:
+        return unavailable(MISSING_LLM_KEY_CODE, "服务端未配置模型密钥，Agent 暂不可用。")
+    if not ak:
+        return unavailable(MISSING_BAIDU_KEY_CODE, "服务端未配置百度服务端 AK，Agent 暂不可用。")
+
+    model = DeepSeekLLM(llm_key)
+    gateway = MVPToolGateway.from_baidu_ak(ak)
+
+    def runner(request: AgentRunRequest) -> AgentRunState:
+        return run_agent(
+            run_id=_run_id(request),
+            user_message=request.user_message,
+            orchestrator=OrchestratorAgent(model),
+            gateway=gateway,
+            planning_agent=PlanningAgent(model),
+            reviewer_agent=ReviewerAgent(model),
+        )
+
+    return runner
+
+
 def _allowed_origins() -> list[str]:
     raw = os.environ.get("CORS_ORIGINS") or "http://localhost:5173,http://127.0.0.1:5173"
     origins = [item.strip() for item in raw.split(",") if item.strip()]
@@ -94,6 +167,43 @@ async def invalid_request(request: Request, exc: RequestValidationError):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/v1/agent/runs", response_model=AgentRunState)
+def agent_run_api(
+    request: AgentRunRequest, run: AgentRunner = Depends(get_agent_runner)
+) -> AgentRunState:
+    """Run one Agent request to a terminal state and return that state.
+
+    The response *is* `AgentRunState`, so the API cannot drift from the
+    Runtime. A well-formed request always returns 200: `failed`,
+    `waiting_for_input` and `completed` are all legitimate terminal states and
+    are distinguished by `status`, `completion_mode` and `errors`, not by the
+    HTTP code. Malformed bodies are rejected as 422 by FastAPI.
+    """
+    try:
+        return run(request)
+    except Exception:
+        # `run_agent` already converts its own failures into a failed Run, so
+        # reaching here means the runner itself broke. Report it in the state
+        # rather than leaking an internal message.
+        return AgentRunState(
+            schema_version="1.0",
+            run_id=_run_id(request),
+            status=RunStatus.FAILED,
+            completion_mode=None,
+            user_message=request.user_message,
+            brief=None,
+            evidence=None,
+            planning_proposal=None,
+            review_result=None,
+            planning_round=0,
+            tool_retry_count=0,
+            warnings=[],
+            errors=[
+                ErrorDetail(code="API_ERROR", message="Agent 执行暂不可用。", retryable=False)
+            ],
+        )
 
 
 @app.post("/api/v1/location/resolve", response_model=LocationResult)
