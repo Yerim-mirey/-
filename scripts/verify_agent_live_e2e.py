@@ -96,8 +96,8 @@ CASES: tuple[Case, ...] = (
     Case(
         case_id="walk-time-coordinate",
         message=(
-            "我在坐标 121.506123,31.282456，想知道步行 15 分钟内"
-            "能到哪些菜市场"
+            "我的位置是 BD09LL 坐标 121.506123,31.282456，"
+            "步行 15 分钟内能到哪些菜市场？"
         ),
         expect_status=RunStatus.COMPLETED,
         expect_planning=False,
@@ -405,7 +405,7 @@ def check_semantics(case: Case, state: AgentRunState, recorder: Recorder) -> Non
         )
     if case.expect_status is RunStatus.COMPLETED:
         recorder.add_check(
-            "completed-has-evidence",
+            "completed-must-have-evidence",
             state.evidence is not None,
             "completed 却没有 Evidence",
         )

@@ -291,7 +291,7 @@ def test_completed_run_missing_evidence_is_reported_by_the_checker():
     check_semantics(case, state, recorder)
 
     assert not recorder.passed
-    assert any("completed-has-evidence" in problem for problem in recorder.problems)
+    assert any("completed-must-have-evidence" in problem for problem in recorder.problems)
 
 
 def test_observe_records_public_fields_only():
