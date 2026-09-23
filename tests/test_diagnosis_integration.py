@@ -219,3 +219,28 @@ def test_partial_facility_routing_does_not_become_zero_or_blind():
     assert metrics(result)["pharmacy"].confirmed_reachable_15m_count == 0
     assert metrics(result)["pharmacy"].unknown_ratio == 1
     assert result.root.data.quality.confidence.value == "low"
+
+
+def test_isochrone_failure_message_carries_the_routing_reason():
+    """The envelope must name an AK/whitelist refusal, not just "isochrone failed".
+
+    Otherwise a misconfigured deployment and a genuinely sparse walking network
+    produce the same opaque diagnosis error.
+    """
+    refusal = "步行批量算路拒绝了服务端 AK：出口 IP 不在白名单。"
+    iso_failure = IsochroneResult.model_validate({
+        "ok": False,
+        "error": {"code": "ROUTING_FAILED",
+                  "message": f"有效步行测时数据不足。（Routing 返回：{refusal}）",
+                  "retryable": True},
+        "warnings": [],
+        "meta": {"schema_version": "1.0", "provider": "baidu"},
+    })
+
+    result = run(generate_isochrone=lambda _: iso_failure)
+
+    assert not result.root.ok
+    assert result.root.error.code.value == "ISOCHRONE_FAILED"
+    assert "白名单" in result.root.error.message
+    # The API key itself must never surface through an error message.
+    assert "ak=" not in result.root.error.message.lower()

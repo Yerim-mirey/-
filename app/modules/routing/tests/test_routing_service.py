@@ -116,3 +116,39 @@ def test_retryable_error_is_retried_once() -> None:
     assert result.ok is True
     assert provider.calls == 2
     assert slept == [0.5]
+
+
+def test_a_refused_ak_message_names_the_cause_without_leaking_the_key():
+    """Surfacing the provider reason must not surface the AK or a request URL.
+
+    The message is what tells an operator the deployment is misconfigured, so it
+    is surfaced deliberately; this pins that it stays sanitised.
+    """
+    secret = "super-secret-ak-value"
+
+    class RefusingProvider:
+        def route_matrix(self, _origin, _destinations):
+            raise BaiduRoutingError(
+                "INVALID_REQUEST",
+                "百度步行批量算路拒绝了服务端 AK：出口 IP 不在白名单，或 AK 未获授权。",
+                retryable=False,
+            )
+
+    result = RoutingService(RefusingProvider()).route(request_with(2)).root
+
+    assert result.ok is False
+    assert "白名单" in result.error.message
+    assert secret not in result.error.message
+    assert "http" not in result.error.message.lower()
+
+
+def test_a_provider_error_without_a_message_falls_back_to_the_constant():
+    """An empty message must not produce an empty public error."""
+    class SilentProvider:
+        def route_matrix(self, _origin, _destinations):
+            raise BaiduRoutingError("PROVIDER_ERROR", "", retryable=True)
+
+    result = RoutingService(SilentProvider()).route(request_with(2)).root
+
+    assert result.ok is False
+    assert result.error.message.strip() != ""

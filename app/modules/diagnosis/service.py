@@ -49,8 +49,16 @@ def diagnose(
         return _failure(DiagnosisErrorCode.ISOCHRONE_FAILED, "等时圈生成失败。", False,
                         location.warnings, location.meta.provider)
     if not isinstance(isochrone, IsochroneSuccess):
-        return _failure(DiagnosisErrorCode.ISOCHRONE_FAILED, "等时圈生成失败。", isochrone.error.retryable,
-                        [*location.warnings, *isochrone.warnings], isochrone.meta.provider or location.meta.provider)
+        # Keep the isochrone's own message: it carries the underlying routing
+        # refusal when there was one, which is what tells an AK or whitelist
+        # problem apart from a genuinely sparse walking network.
+        return _failure(
+            DiagnosisErrorCode.ISOCHRONE_FAILED,
+            f"等时圈生成失败：{isochrone.error.message}",
+            isochrone.error.retryable,
+            [*location.warnings, *isochrone.warnings],
+            isochrone.meta.provider or location.meta.provider,
+        )
 
     radius = minimum_poi_search_radius_m(center, isochrone.data.geometry, request.service_distance_m)
     poi_request = POISearchRequest(

@@ -79,7 +79,12 @@ class RoutingService:
                     ok=False,
                     error={
                         "code": _public_error_code(error.code),
-                        "message": _PROVIDER_MESSAGE,
+                        # The provider's own message, not a fixed constant: the
+                        # reason is what distinguishes a refused AK from a
+                        # transient fault or bad parameters. Every provider
+                        # message is a fixed Chinese string, so it carries no
+                        # AK, URL or raw Baidu payload.
+                        "message": str(error) or _PROVIDER_MESSAGE,
                         "retryable": error.retryable,
                     },
                     warnings=[],

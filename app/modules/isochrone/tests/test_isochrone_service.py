@@ -104,3 +104,71 @@ def test_finite_outward_extension_finds_larger_boundary() -> None:
     assert result.ok is True
     assert router.calls[:2] == [24, 4]
     assert all(point.radial_distance_m > 1800 for point in result.data.boundary_points)
+
+
+def test_a_routing_refusal_reason_is_surfaced_in_the_failure_message():
+    """An AK/whitelist refusal must not read as a mere shortage of walking data.
+
+    Routing and a sparse street network both yield zero measurements, so without
+    the reason an operator cannot tell a misconfigured deployment from real map
+    data gaps.
+    """
+    from app.schemas.routing import (
+        RoutingFailure,
+        RoutingResult,
+        RoutingErrorCode,
+    )
+
+    refusal = "百度步行批量算路拒绝了服务端 AK：出口 IP 不在白名单，或 AK 未获授权。"
+
+    def refusing_route(_request):
+        return RoutingResult(root=RoutingFailure(
+            ok=False,
+            error={"code": RoutingErrorCode.INVALID_REQUEST, "message": refusal,
+                   "retryable": False},
+            warnings=[],
+            meta={"schema_version": "1.0", "provider": "baidu"},
+        ))
+
+    result = IsochroneService(refusing_route).generate(request()).root
+
+    assert result.ok is False
+    assert "白名单" in result.error.message
+
+
+def test_a_failure_without_a_refusal_keeps_the_plain_message():
+    """A genuine data shortage must not gain a spurious Routing reason."""
+    from app.schemas.routing import RoutingResult, RoutingSuccess, RoutingData, RoutingSummary
+
+    def unavailable_route(req):
+        # A successful envelope whose targets are all unavailable: routing did
+        # answer, so there is no refusal to report, only missing measurements.
+        routes = [
+            {
+                "target_id": target.target_id,
+                "location": target.location.model_dump(),
+                "status": "unavailable",
+                "distance_m": None,
+                "duration_s": None,
+            }
+            for target in req.targets
+        ]
+        return RoutingResult(root=RoutingSuccess(
+            ok=True,
+            data=RoutingData(
+                origin=req.origin.model_dump(),
+                travel_mode="walking",
+                routes=routes,
+                summary=RoutingSummary(
+                    requested=len(routes), success=0, no_route=0,
+                    unavailable=len(routes),
+                ),
+            ),
+            warnings=[],
+            meta={"schema_version": "1.0", "provider": "baidu"},
+        ))
+
+    result = IsochroneService(unavailable_route).generate(request()).root
+
+    assert result.ok is False
+    assert "Routing 返回" not in result.error.message

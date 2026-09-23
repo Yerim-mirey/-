@@ -69,16 +69,18 @@ class IsochroneService:
         sample_count = 0
         success_count = 0
         had_missing_routes = False
+        routing_refusal: str | None = None
 
         initial = initial_samples(
             request.center,
             direction_count=self.direction_count,
             radii_m=self.initial_radii_m,
         )
-        measured, attempted, succeeded, missing = self._measure(request, initial)
+        measured, attempted, succeeded, missing, refusal = self._measure(request, initial)
         sample_count += attempted
         success_count += succeeded
         had_missing_routes |= missing
+        routing_refusal = routing_refusal or refusal
         _append_measurements(measurements, measured)
 
         next_radius = max(self.initial_radii_m) + self.extension_step_m
@@ -106,10 +108,11 @@ class IsochroneService:
                 )
                 for bearing in missing_bearings
             ]
-            measured, attempted, succeeded, missing = self._measure(request, extension)
+            measured, attempted, succeeded, missing, refusal = self._measure(request, extension)
             sample_count += attempted
             success_count += succeeded
             had_missing_routes |= missing
+            routing_refusal = routing_refusal or refusal
             _append_measurements(measurements, measured)
             next_radius += self.extension_step_m
 
@@ -121,10 +124,11 @@ class IsochroneService:
             ]
             if not candidates:
                 break
-            measured, attempted, succeeded, missing = self._measure(request, candidates)
+            measured, attempted, succeeded, missing, refusal = self._measure(request, candidates)
             sample_count += attempted
             success_count += succeeded
             had_missing_routes |= missing
+            routing_refusal = routing_refusal or refusal
             for item in measured:
                 bearing = item.sample.bearing_deg
                 brackets[bearing] = update_bracket(
@@ -146,12 +150,17 @@ class IsochroneService:
                 if success_count == 0
                 else IsochroneErrorCode.INSUFFICIENT_ROUTING_DATA
             )
+            message = "有效步行测时数据不足，无法生成可靠等时圈。"
+            if routing_refusal:
+                # Surface the underlying refusal so an AK/whitelist problem is
+                # not reported as a mere shortage of walking data.
+                message = f"{message}（Routing 返回：{routing_refusal}）"
             return IsochroneResult(
                 root=IsochroneFailure(
                     ok=False,
                     error={
                         "code": code,
-                        "message": "有效步行测时数据不足，无法生成可靠等时圈。",
+                        "message": message,
                         "retryable": True,
                     },
                     warnings=warnings,
@@ -189,9 +198,16 @@ class IsochroneService:
 
     def _measure(
         self, request: IsochroneRequest, samples: list[SamplePoint]
-    ) -> tuple[list[MeasuredSample], int, int, bool]:
+    ) -> tuple[list[MeasuredSample], int, int, bool, str | None]:
+        """Measure samples, returning the routing refusal reason if one occurred.
+
+        The reason matters: an AK or whitelist refusal and a genuinely sparse
+        street network both produce zero measurements, but only one of them is
+        the operator's problem. Dropping it made a misconfigured deployment
+        indistinguishable from a data gap.
+        """
         if not samples:
-            return [], 0, 0, False
+            return [], 0, 0, False, None
         routing_request = RoutingRequest(
             schema_version="1.0",
             origin=request.center,
@@ -200,14 +216,14 @@ class IsochroneService:
         )
         result = self.route(routing_request).root
         if not result.ok:
-            return [], len(samples), 0, True
+            return [], len(samples), 0, True, result.error.message
         by_id = {sample.sample_id: sample for sample in samples}
         measured = [
             MeasuredSample(by_id[route.target_id], route.duration_s)
             for route in result.data.routes
             if route.status is RouteStatus.SUCCESS and route.duration_s is not None
         ]
-        return measured, len(samples), len(measured), len(measured) != len(samples)
+        return measured, len(samples), len(measured), len(measured) != len(samples), None
 
 
 def generate_isochrone(request: IsochroneRequest, route: Route) -> IsochroneResult:
