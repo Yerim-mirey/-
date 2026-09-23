@@ -107,8 +107,8 @@ CASES: tuple[Case, ...] = (
     Case(
         case_id="planning-coordinate",
         message=(
-            "坐标 121.506123,31.282456 的菜市场、药店和小学配置是否合理？"
-            "请给出改善规划建议"
+            "我的位置是 BD09LL 坐标 121.506123,31.282456，"
+            "菜市场、药店和小学配置是否合理？请给出改善规划建议"
         ),
         expect_status=RunStatus.COMPLETED,
         expect_planning=True,
