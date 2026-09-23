@@ -90,15 +90,40 @@ RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_live_e2e a
 
 **证据追踪：** 三个成功案例的**每一条** `EvidenceRef.json_pointer` 都在其 bundle 内解析成功。坐标案例 23 条引用（location 1 + poi 11 + routing 11）全部通过；规划案例的 Proposal 与 Review 均绑定当前 bundle，Reviewer 返回 `approved`。
 
-**规划案例的 warnings（必须并列记录）：** `PARTIAL_DIAGNOSIS`、`PARTIAL_POI_RESULTS`、`BLINDSPOT_UNAVAILABLE`、`NO_ROUTE_FOR_TARGETS`，且 `completion_mode` 仍为 `normal`。按契约这**不是矛盾**——交接文件明确 `completed` 只代表程序走到终态、不自动证明回答充分，而 `mode` 目前只反映规划工作流的 Review 结论、不反映证据完整度。但这意味着两种截然不同的运行会得到同一个 `mode=normal`：事实完整的，和事实不完整的。**消费者不能把 `mode=normal` 读作“证据完整”。** 该缺口已记录为待决设计项（见第 6 节），本文不擅自改动冻结语义。
+**规划案例的 warnings（必须并列记录）：** `PARTIAL_DIAGNOSIS`、`PARTIAL_POI_RESULTS`、`BLINDSPOT_UNAVAILABLE`、`NO_ROUTE_FOR_TARGETS`，且 `completion_mode` 仍为 `normal`。按契约这**不是矛盾**——交接文件明确 `completed` 只代表程序走到终态、不自动证明回答充分，而 `mode` 目前只反映规划工作流的 Review 结论、不反映证据完整度。但这意味着两种截然不同的运行会得到同一个 `mode=normal`：事实完整的，和事实不完整的。**消费者不能把 `mode=normal` 读作“证据完整”。** 该缺口的实际风险已在 2.6 专项核查。
 
-**模型侧传输层失败（两次，可复现）：** 为核对上述 warnings 的内部事实，同一案例被重跑两次，两次都在证据取得之前失败：
+### 2.6 不完全证据下的建议质量（针对上述 warnings 的专项核查）
+
+2.5 的 warnings 引出一个真实风险：体检数据不完整时，Planner 会不会产出**过度自信**的建议、而 Reviewer 放行？为此在重试修复后重跑同案例并完整读取 Proposal 与 Review（`run:inspect3`，状态 `completed`，`mode=normal`，各次模型调用均一次成功）。
+
+诊断事实上确实**不完整**——三类设施都有约 20%–27.5% 的未知网格，`covered_ratio` 仅 0.69–0.80，`confidence=low`：
+
+| 类别 | POI | 15 分钟可达 | 已覆盖 | 盲区 | **未知** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 市场 | 35 | 4 | 0.797 | 0.000 | **0.203** |
+| 药店 | 43 | 7 | 0.797 | 0.000 | **0.203** |
+| 小学 | 22 | 2 | 0.689 | 0.036 | **0.275** |
+
+**结论：未观察到过度自信，担心不成立。** Planner 与 Reviewer 都正确处理了不完全证据：
+
+- Proposal 的 `limitations` 逐条写明：整体置信度 low、盲区阶段为 partial、约 20%–27% 未知网格“既不能判为已覆盖也不能判为盲区，无法据此得出全区结论”、并声明未指定候选点位；
+- 4 条建议里有 2 条的**主题本身就是证据缺口**（“补齐未知网格证据”、“稳定步行路线证据”），而非给出确定性定论；
+- 对市场/药店明确写“维持观察而非定论”，并注明“`0.0` 为当前样本下的结果，不能表述为确定无盲区”；
+- 建议的限制里写明“本建议不重新计算 GIS，不调用地图工具”；
+- Reviewer 返回 `approved` 且 0 issues，与该 Proposal 的实际质量相符。
+
+因此第 4.4 节第 2 项的风险**降级**：`mode` 的语义模糊依然存在（消费者不能把 `normal` 读作“证据完整”），但**这不是正确性缺陷**——限制已写进 Proposal 正文与 `limitations`，警告也在同一响应里。是否需要让不完全证据降级为 `with_limitations`，现可作为一个**可用性/标注**决策从容处理，而非风险修复。
+
+**同时记录一个必须诚实说明的限度：这是 n=1。** 一次规划运行的 Proposal 表现良好，**不足以**支撑“建议质量达标”的结论；4.3 的语义抽样退出条件因此仍不勾选。
+
+### 2.7 模型侧传输层失败（修复前实测两次）
+
+为核对 2.5 中 warnings 的内部事实，同一规划案例被重跑两次，**两次都在证据取得之前失败**：
 
 - 一次 `status=failed`、`errors=[UNEXPECTED_ERROR]`，消息为 `DeepSeek request failed: The read operation timed out`（Orchestrator 首次调用即超时，`brief` 为 `None`，`tool_retry_count=0`）；
 - 另一次长时间无返回，被主动终止。
 
-根因是结构性的：适配器默认 `timeout_seconds=60`，而 Runner **只对 Tool 失败消耗重试预算，对模型失败不重试**，因此一次模型超时会让整个 Run 以 `failed` 终止。该问题已在本次改动中修复，见 4.4 第 1 项。
-
+根因是结构性的：适配器默认 `timeout_seconds=60`，而 Runner **只对 Tool 失败消耗重试预算，对模型失败不重试**，因此一次模型超时会让整个 Run 以 `failed` 终止。**该问题已修复**（见 4.4 第 1 项）：修复后 2.6 那次同案例重跑各次模型调用均一次成功、状态 `completed`。
 
 ## 3. 真实模型侧结论（已执行）
 
@@ -198,7 +223,7 @@ RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 \
 ### 4.4 已知问题与待办
 
 1. **[已修复] 模型失败不重试**：适配器现在对**可恢复**失败做有界重试——网络/超时、HTTP 429 与 5xx、以及 JSON 模式偶发的空内容；**不重试**确定性失败（4xx、`max_tokens` 截断、内容非法 JSON），以免把配置错误藏在重试后面。默认 `max_retries=2` + 指数退避（0.5s、1s），`sleep` 可注入，`last_attempts` 记录实际尝试次数，耗尽后消息注明重试次数。修复后真实链路不再因单次模型抖动丢掉整个 Run。**仍未做**：跨 Run 的持久化重试/断点续跑——同步接口下若模型在诊断第 8 分钟彻底不可用，该次运行仍会失败，只是不再因一次抖动失败。
-2. **`completion_mode` 不反映证据完整度**：`mode=normal` 同时覆盖“事实完整”和“`PARTIAL_DIAGNOSIS`”两种运行。是否让不完全证据降级为 `with_limitations` 属于冻结语义的变更，需要明示决策，不能顺带修改。**待验证前提**：尚需确认“体检数据不完整时，Planner 是否会产出过度自信的建议、而 Reviewer 是否放行”——本次两次尝试读取 Proposal 全文都赶上模型超时，未能取证。
+2. **`completion_mode` 不反映证据完整度（风险已核查，降级为标注决策）**：`mode=normal` 同时覆盖“事实完整”和“`PARTIAL_DIAGNOSIS`”两种运行，消费者不能把 `normal` 读作“证据完整”。**但 2.6 的专项核查未发现正确性缺陷**：在 20%–27.5% 未知网格、`confidence=low` 的输入下，Planner 把限制写进了 Proposal 正文与 `limitations`（含“`0.0` 不能表述为确定无盲区”），4 条建议中 2 条的主题就是补齐证据，Reviewer 的 `approved` 与实际质量相符。因此这只是**可用性/标注**问题，可从从容决策，不必作为风险修复。若要改，属于冻结语义变更，需明示决策。
 3. **语义评分表未建立**：4.3 最后一项要落地，需要一个固定的抽查量表（意图识别、设施归类、建议是否越界、Reviewer 是否漏判）。
 4. **长任务与并发**：Agent API 仍是同步执行；任务化/超时/取消未实现。
 

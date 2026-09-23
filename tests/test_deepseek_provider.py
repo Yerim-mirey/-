@@ -426,3 +426,112 @@ def test_a_successful_first_attempt_does_not_sleep():
     assert len(calls) == 1
     assert sleeps == []
     assert llm.last_attempts == 1
+
+
+# --- Runner-level effect ----------------------------------------------------
+
+
+def extraction_body() -> dict:
+    """A completion whose content is a valid Orchestrator extraction."""
+    extraction = {
+        "intent": "facility_query",
+        "user_goal": "查看附近设施",
+        "location": {"type": "address", "query": "示例路1号", "city": "上海市"},
+        "facility_types": ["market"],
+        "use_standard_facilities": False,
+    }
+    return {
+        "model": "deepseek-flash",
+        "choices": [
+            {
+                "message": {"content": json.dumps(extraction, ensure_ascii=False)},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def _dead_gateway(marker: str):
+    """A real ToolGateway that fails with `marker` if it is ever reached.
+
+    It must be a genuine protocol implementation because `run_agent` checks the
+    protocol, and the Runner converts any escaped exception into a failed Run,
+    so the marker is how a test tells "the model stage passed" apart from
+    "the model stage failed".
+    """
+    from tests.e2e.helpers import ScriptedToolGateway
+
+    class _Reached(ScriptedToolGateway):
+        def _next(self, method, request):  # pragma: no cover - always raises
+            raise RuntimeError(f"{marker}:{method}")
+
+    return _Reached({})
+
+
+def _runner_state(transport_handler, **llm_kwargs):
+    """Run one request and report how far it got.
+
+    `run_agent` converts its own failures into a failed Run, so a returned
+    status means the model stage was passed.
+    """
+    from app.agent_runtime.runner import run_agent
+    from app.agents.orchestrator import OrchestratorAgent
+
+    marker = "GATEWAY-REACHED"
+    client = httpx.Client(transport=httpx.MockTransport(transport_handler))
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None, **llm_kwargs)
+    state = run_agent(
+        run_id="run:retry-check",
+        user_message="查一下附近的菜市场",
+        orchestrator=OrchestratorAgent(llm),
+        gateway=_dead_gateway(marker),
+    )
+    reached = any(marker in error.message for error in state.errors)
+    return state.status.value, [error.code for error in state.errors], reached, llm
+
+
+def test_a_single_transient_model_failure_does_not_end_the_run():
+    """After the retry succeeds, the Run proceeds instead of failing on it.
+
+    The gateway is deliberately unavailable, so reaching it is the proof that
+    the transient model failure was absorbed rather than propagated.
+    """
+    calls = {"n": 0}
+
+    def handler(_request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(200, json=extraction_body())
+
+    status, codes, reached, llm = _runner_state(handler)
+
+    # The model stage was passed (the gateway was reached), so the transient
+    # failure was absorbed rather than propagated.
+    assert reached is True, codes
+    assert calls["n"] == 2
+    assert llm.last_attempts == 2
+
+
+def test_a_permanently_dead_model_still_fails_the_run():
+    def handler(_request):
+        raise httpx.ReadTimeout("down")
+
+    status, codes, reached, llm = _runner_state(handler)
+
+    assert status == "failed"
+    assert codes == ["UNEXPECTED_ERROR"]
+    assert reached is False, "the gateway must not be reached on a dead model"
+    assert llm.last_attempts == llm.max_retries + 1
+
+
+def test_the_run_still_fails_when_retries_are_disabled():
+    def handler(_request):
+        raise httpx.ReadTimeout("down")
+
+    status, codes, reached, _llm = _runner_state(handler, max_retries=0)
+
+    assert status == "failed"
+    assert codes == ["UNEXPECTED_ERROR"]
+    assert reached is False
