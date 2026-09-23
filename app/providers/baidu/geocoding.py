@@ -192,6 +192,16 @@ def _status_error(status: object) -> BaiduGeocodingError:
             "百度地图拒绝了地理编码请求参数。",
             retryable=False,
         )
+    # Baidu reports a whitelist or key-authorisation problem as status 210
+    # ("APP IP 校验失败") with HTTP 200. Without this branch it collapsed into a
+    # generic provider failure, so a deployment misconfiguration was
+    # indistinguishable from a transient outage.
+    if status in {210, 211}:
+        return BaiduGeocodingError(
+            LocationErrorCode.INVALID_REQUEST,
+            "百度地图拒绝了服务端 AK：出口 IP 不在白名单，或 AK 未获授权。",
+            retryable=False,
+        )
     if status == 4 or status == 401 or (
         isinstance(status, int) and 300 <= status < 400
     ):

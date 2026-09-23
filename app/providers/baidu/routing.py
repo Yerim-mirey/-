@@ -155,6 +155,14 @@ def _status_error(status: int | None) -> BaiduRoutingError:
         return BaiduRoutingError(
             "RATE_LIMITED", "百度步行批量算路配额受限。", retryable=True
         )
+    # Status 210/211 is an AK authorisation or IP-whitelist refusal returned
+    # with HTTP 200; without this branch it read as a generic provider fault.
+    if status in {210, 211}:
+        return BaiduRoutingError(
+            "INVALID_REQUEST",
+            "百度步行批量算路拒绝了服务端 AK：出口 IP 不在白名单，或 AK 未获授权。",
+            retryable=False,
+        )
     return BaiduRoutingError(
         "PROVIDER_ERROR",
         "百度步行批量算路服务返回错误。",

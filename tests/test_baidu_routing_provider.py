@@ -52,7 +52,16 @@ def test_provider_rejects_more_than_fifty_destinations() -> None:
 
 @pytest.mark.parametrize(
     ("status", "code", "retryable"),
-    [(1, "PROVIDER_ERROR", True), (2, "INVALID_REQUEST", False), (4, "RATE_LIMITED", True), (210, "PROVIDER_ERROR", False)],
+    [
+        (1, "PROVIDER_ERROR", True),
+        (2, "INVALID_REQUEST", False),
+        (4, "RATE_LIMITED", True),
+        # 210 is Baidu's "APP IP 校验失败": an AK or whitelist refusal served
+        # with HTTP 200. It must be distinguishable from a transient outage, so
+        # it maps to INVALID_REQUEST rather than the generic PROVIDER_ERROR.
+        (210, "INVALID_REQUEST", False),
+        (211, "INVALID_REQUEST", False),
+    ],
 )
 def test_provider_maps_baidu_status(status: int, code: str, retryable: bool) -> None:
     provider = BaiduRoutingProvider(

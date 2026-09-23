@@ -62,6 +62,7 @@ from app.providers.baidu.live import build_live_providers
 from app.providers.baidu.quota import snapshot
 from app.providers.deepseek import DeepSeekLLM, api_key_from_env
 from app.schemas.agent import AgentRunState, RunStatus
+from app.schemas.location import LocationErrorCode
 
 
 # A fixed, real Shanghai centre: the same one the 2026-09-22 Tool acceptance
@@ -482,7 +483,14 @@ def run_probe() -> int:
         match = provider.geocode(FIXED_ADDRESS)
     except BaiduGeocodingError as exc:
         print(f"PROBE FAILED: code={exc.code} retryable={exc.retryable} message={exc}")
-        print("含义：AK 无效、IP 未加入白名单、或配额/服务未开通。")
+        if exc.code is LocationErrorCode.INVALID_REQUEST:
+            print("含义：服务端 AK 被拒——出口 IP 不在百度白名单，或该 AK 未获授权。")
+            print("排查：把本机出口 IP 加入百度控制台白名单（`curl -s https://api.ipify.org`）；")
+            print("      出口不是固定单 IP 时优先填写 CIDR 网段。")
+        elif exc.code is LocationErrorCode.RATE_LIMITED:
+            print("含义：配额或并发已达上限；稍后重试并核对控制台配额。")
+        else:
+            print("含义：非 AK/白名单问题，可能是网络或服务未开通。")
         return 1
     print("PROBE OK: 百度 Web Service 可达，AK 与 IP 白名单已生效。")
     print(f"  center=({match.center.lng:.6f}, {match.center.lat:.6f}) crs={match.center.crs}")

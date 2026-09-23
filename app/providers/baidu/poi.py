@@ -192,12 +192,21 @@ class BaiduPOIProvider:
                 code = "RATE_LIMITED"
             elif status == 2:
                 code = "INVALID_REQUEST"
+            elif status in {210, 211}:
+                # AK authorisation or IP-whitelist refusal, returned with HTTP
+                # 200; naming it keeps a deployment problem out of the generic
+                # BAIDU_STATUS_* bucket.
+                code = "INVALID_REQUEST"
             elif status == 1:
                 code = "TIMEOUT"
             else:
                 code = f"BAIDU_STATUS_{status}"
             raise POIProviderError(
-                code, "Baidu Place API request failed.", status in {1, 4, 302, 401}
+                code,
+                "百度地图拒绝了服务端 AK：出口 IP 不在白名单，或 AK 未获授权。"
+                if status in {210, 211}
+                else "Baidu Place API request failed.",
+                status in {1, 4, 302, 401},
             )
 
         raw_results = payload.get("results", [])

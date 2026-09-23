@@ -78,6 +78,11 @@ def test_object_poi_info_shape_is_supported() -> None:
         (2, LocationErrorCode.INVALID_REQUEST, False),
         (4, LocationErrorCode.RATE_LIMITED, True),
         (302, LocationErrorCode.RATE_LIMITED, True),
+        # Baidu's "APP IP 校验失败" arrives as status 210 with HTTP 200. It is
+        # a deployment/authorisation refusal, not a transient provider fault,
+        # so it must be distinguishable from the generic PROVIDER_ERROR.
+        (210, LocationErrorCode.INVALID_REQUEST, False),
+        (211, LocationErrorCode.INVALID_REQUEST, False),
         (1, LocationErrorCode.PROVIDER_ERROR, True),
         (5, LocationErrorCode.PROVIDER_ERROR, False),
     ],
