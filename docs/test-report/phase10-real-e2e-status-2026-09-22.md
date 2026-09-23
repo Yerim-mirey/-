@@ -8,9 +8,9 @@
 | --- | --- |
 | 仓库 | `/Users/liuyanhe/Desktop/15分钟生活圈智能体检与规划助手/` |
 | 分支 | `feat/mvp-tool-gateway` |
-| 本文基准 HEAD | `77165bd`，`fix: drop the minimum-spacing rule from the Baidu quota guard` |
+| 本文基准 HEAD | `1cb7931`，`fix: ground the diagnostic proposal so Reviewer verdicts mean something` |
 | 本轮起点 | `aaf9d0c`（Phase 9 交接文档） |
-| 本轮新增提交 | 6 个：`a406e70` 配额层、`e8ec055` 验收入口、`2be62ba` 自检、`f41ce30` 文档、`c4b39e5` 拒绝诊断、`77165bd` 配额约束修正 |
+| 本轮新增提交 | 8 个：`a406e70` 配额层、`e8ec055` 验收入口、`2be62ba` 自检、`f41ce30` 文档、`c4b39e5` 拒绝诊断、`77165bd` 配额约束修正、`262a885` 三角色测量、`1cb7931` 夹具修正 |
 | 改动规模 | 见 `git diff --stat aaf9d0c..HEAD` |
 
 对齐的冻结基线：`docs/architecture/15分钟生活圈_Agent_App_Architecture_v1.0_交接文档.md` 第 4、11–16、20–22 节。本阶段未改动 Tool 1–6 的业务算法、任何 v1 Contract/Schema，也未改动百度单批 50 目标的限制。
@@ -70,7 +70,7 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 
 ### 3.1 此前那次“未定位的 Planning 校验拒绝”已定位
 
-`docs/test-report/phase10-prep-deepseek-adapter-2026-09-22.md` 第 4 节记录：4 次真实 Planning 调用中有 1 次被 `PlanningAgent` 的确定性校验拒绝，原因未定位，因为当时脚本只打印拒绝文本、不保留输出。`scripts/diagnose_planning_rejections.py` 复现并归因到 `app/agents/planning.py` 第 77 行的四个条件之一。
+`docs/test-report/phase10-prep-deepseek-adapter-2026-09-22.md` 第 4 节记录：4 次真实 Planning 调用中有 1 次被 `PlanningAgent` 的确定性校验拒绝，原因未定位，因为当时脚本只打印拒绝文本、不保留输出。`scripts/diagnose_agent_contracts.py` 复现并归因到 `app/agents/planning.py` 第 77 行的四个条件之一。
 
 `deepseek-flash`，各 12 次真实调用：
 
@@ -79,7 +79,9 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 | `smoke`（原冒烟夹具） | 1 | 9/12 | **1** | 2 |
 | `realistic`（每设施指标一条） | 3 | **11/12** | **0** | 1 |
 
-**结论：那次拒绝是夹具不真实造成的，不是模型缺陷。** 原冒烟夹具只有一条引用 `diagnosis:facility-market`，而真实 Runner 会为每个指标生成 `diagnosis:facility-<type>`（见 `app/agent_runtime/runner.py`）。模型合理地引用了药店/小学的体检证据，却因为夹具里根本不存在该引用而被确定性校验正确拒绝——**校验逻辑是对的，harness 不真实**。换成三条引用的 `realistic` 证据包后，确定性拒绝归零。
+**结论：那次拒绝是夹具不真实造成的，不是模型缺陷。** 原冒烟夹具只有一条引用 `diagnosis:facility-market`，而真实 Runner 会为每个指标生成 `diagnosis:facility-<type>`（见 `app/agent_runtime/runner.py`）。模型合理地引用了药店/小学的体检证据，却因为夹具里根本不存在该引用而被确定性校验正确拒绝——**校验逻辑是对的，harness 不真实**。
+
+换成三条引用的 `realistic` 证据包后，**未知引用这一类拒绝没有再出现**（该次 12 轮与 3.4 节的 10 轮均为 0）。但确定性拒绝并未完全归零：两次 realistic 运行各出现 1 次 `PlanningOutputError`，样本不足以断言原因，仍需更大样本。
 
 ### 3.2 真实模型确实存在的失败模式
 
@@ -91,12 +93,34 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 
 这三种都是“很接近正确”的输出被契约正确拦下。它们**不是**语义质量结论，只说明形状稳定性。
 
-### 3.3 必须并列声明的限制
+### 3.4 三个角色各自的合同结果（`262a885`、`1cb7931`）
 
-- **样本量小**：每配置 12 次，不足以给出稳定的失败率；上述比例只是观测值。
-- **仍是冒烟级输入**：`diagnose_planning_rejections` 用的是固定 `contracts/v1` 样例证据，不含真实百度数据，也不含多轮返工。
-- **未评测语义质量**：所有通过率只证明“输出符合 Schema 与确定性引用校验”，**不证明规划建议正确**。意图识别、设施归类、建议是否越界、Reviewer 是否漏判，都需要真实数据 + 人工抽样。
-- **未覆盖三 Agent 全链路**：本节只测 Planning 单角色；Orchestrator/Reviewer 的相对旧观测（4/4、4/4）仍未被更大样本复验。
+第 3.1 节的旧观测是「Orchestrator 4/4、Planning 3/4、Reviewer 4/4」，样本太少。`scripts/diagnose_agent_contracts.py` 现在**直接调用三个 Agent 的真实校验代码**（`create_brief` / `create_proposal` / `review_proposal`），所以测到的就是 Runner 会接受或拒绝的行为，而不是重写一遍规则。`deepseek-flash`，10 轮/角色、`realistic` 证据包、共 30 次请求：
+
+| 角色 | 合同有效 | 失败 |
+| --- | ---: | --- |
+| Orchestrator | **10/10** | — |
+| Planning | **9/10** | 1 次确定性拒绝（`PlanningOutputError`） |
+| Reviewer | **10/10** | — |
+
+Orchestrator 的意图归类与输入的 6 条消息轮转一致：`facility_query` 5、`accessibility_query` 1、`blindspot_query` 2、`planning_analysis` 2——说明它不是恒定输出。
+
+**Reviewer 的判别能力第一次被真正测到。** 这里必须记录一个我自己犯的测量错误：`proposal_for` 最初按索引轮流分配证据引用，导致「菜市场缺口」这条建议引用了**药店**证据；于是 10 次调用**全部**返回 `revision_required`——那只证明夹具是坏的，不能证明 Reviewer 的质量，因为只喂坏提案的测试分不清「仔细的 Reviewer」和「一律拒绝的 Reviewer」。修好夹具后（`1cb7931`），改为交替投喂「有据可依」与「故意错引」两类提案：
+
+| 输入 | 判定 |
+| --- | --- |
+| 有据可依的提案 | `approved` ×3、`revision_required` ×1、`insufficient_evidence` ×1 |
+| 故意错引的提案 | `revision_required` ×**5** |
+
+**错引 5/5 全部被抓出**，有据可依的两例偏保守（一次要求返工、一次判证据不足）。这是目前唯一能说明 Reviewer 的判定**跟着证据走、而非恒定输出**的证据。仍属形状与判别层面，**不是**语义正确性评测。
+
+### 3.5 必须并列声明的限制
+
+- **样本量小**：每角色 10–12 次，不足以给出稳定的失败率；上述比例只是观测值。
+- **仍是样例级输入**：诊断脚本用的是固定 `contracts/v1` 样例证据，不含真实百度数据，也不含多轮返工。
+- **未评测语义质量**：所有通过率只证明“输出符合 Schema 与确定性引用校验”。3.4 节的 Reviewer 判别只是“能否发现故意的错引”，**不证明**真实场景下不漏判、规划建议是否真的合理。意图识别、设施归类、建议是否越界，都需要真实数据 + 人工抽样。
+- **Reviewer 的保守偏多**：有据可依的 5 例里 2 例未批准，方向上是保守而非漏放，但需要更大样本才能说清比例。
+- **未覆盖真实全链路**：三 Agent 之间仍由固定夹具驱动，没有经过真实 Gateway、真实 Diagnosis 或多轮回路的联合运行。
 - 诊断输出只保留字段路径与身份形状（如 `diagnosis:<other>`），不含模型原文、标识符与提示词。
 
 ## 4. 阻塞项与收尾步骤
@@ -150,12 +174,12 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/validate_contracts.py
 python -m scripts.verify_agent_live_e2e acceptance --self-check
 
 # 复现第 3 节的诊断（消耗真实模型调用，不消耗百度配额）
-RUN_DEEPSEEK_SMOKE=1 python -m scripts.diagnose_planning_rejections \
-  --rounds 12 --bundle realistic --report data/cache/planning-rejection-realistic.json
+RUN_DEEPSEEK_SMOKE=1 python -m scripts.diagnose_agent_contracts \
+  --rounds 10 --bundle realistic --report data/cache/agent-contract-diagnosis.json
 ```
 
-本机离线结果（`77165bd`）：**516 passed、4 skipped、2 warnings**；Contract 校验输出 `Core MVP Tool 1-6 and Agent v1 contracts validated successfully.`。本轮新增 85 项离线测试（起点 431）。
+本机离线结果（`1cb7931`）：**523 passed、4 skipped、2 warnings**；Contract 校验输出 `Core MVP Tool 1-6 and Agent v1 contracts validated successfully.`。本轮新增 92 项离线测试（起点 431）。
 
 新增测试覆盖：配额窗口与「小请求不被压成每秒一次」的回归、跨线程 FIFO 串行、并发下**聚合**放行量不超过该时段预算、拒绝上界、按 AK 共享与隔离、拆批传播、`--self-check` 全链路、JSON Pointer 解析、Evidence/Proposal/Review 绑定核对、Run ID 格式、以及拒绝归因分类器的每个分支（含“指纹不得携带输出原文”）。
 
-未提交、也未写入本文的内容：`.env`、AK、完整带密钥 URL、百度原始响应、模型原始输出。`data/cache/` 下两个诊断 JSON 属本机临时产物（该目录已被 Git 忽略）。
+未提交、也未写入本文的内容：`.env`、AK、完整带密钥 URL、百度原始响应、模型原始输出。`data/cache/` 下的诊断 JSON 属本机临时产物（该目录已被 Git 忽略）。
