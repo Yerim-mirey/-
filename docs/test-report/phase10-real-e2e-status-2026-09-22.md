@@ -97,7 +97,7 @@ RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_live_e2e a
 - 一次 `status=failed`、`errors=[UNEXPECTED_ERROR]`，消息为 `DeepSeek request failed: The read operation timed out`（Orchestrator 首次调用即超时，`brief` 为 `None`，`tool_retry_count=0`）；
 - 另一次长时间无返回，被主动终止。
 
-根因是结构性的：适配器默认 `timeout_seconds=60`，而 Runner **只对 Tool 失败消耗重试预算，对模型失败不重试**，因此一次模型超时会让整个 Run 以 `failed` 终止。对受控单用户演示是可接受的，但意味着真实链路的可用性受模型服务抖动影响。已列入第 6 节待办，未在本次改动。
+根因是结构性的：适配器默认 `timeout_seconds=60`，而 Runner **只对 Tool 失败消耗重试预算，对模型失败不重试**，因此一次模型超时会让整个 Run 以 `failed` 终止。该问题已在本次改动中修复，见 4.4 第 1 项。
 
 
 ## 3. 真实模型侧结论（已执行）
@@ -195,10 +195,10 @@ RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 \
 - [x] 结果、错误与证据引用逐项检查（三个成功案例的每条 JSON Pointer 均解析成功；失败路径亦已记录）
 - [ ] **真实语义抽样结论**：目前只完成**一次**规划案例的人工检查样本，远不足以支撑“建议质量达标”的结论。仍需按固定评分表对不同中心/不同设施缺口重复抽样。
 
-### 4.4 已知待办（本次未改动）
+### 4.4 已知问题与待办
 
-1. **模型失败不重试**：适配器默认 60s 超时，Runner 只对 Tool 失败消耗重试预算。一次模型超时即让整个 Run `failed`（本次实测两次）。需要决定模型层的重试/退避策略，或在 API 层提供任务化重试。
-2. **`completion_mode` 不反映证据完整度**：`mode=normal` 同时覆盖“事实完整”和“`PARTIAL_DIAGNOSIS`”两种运行。是否让不完全证据降级为 `with_limitations` 属于冻结语义的变更，需要明示决策，不能顺带修改。
+1. **[已修复] 模型失败不重试**：适配器现在对**可恢复**失败做有界重试——网络/超时、HTTP 429 与 5xx、以及 JSON 模式偶发的空内容；**不重试**确定性失败（4xx、`max_tokens` 截断、内容非法 JSON），以免把配置错误藏在重试后面。默认 `max_retries=2` + 指数退避（0.5s、1s），`sleep` 可注入，`last_attempts` 记录实际尝试次数，耗尽后消息注明重试次数。修复后真实链路不再因单次模型抖动丢掉整个 Run。**仍未做**：跨 Run 的持久化重试/断点续跑——同步接口下若模型在诊断第 8 分钟彻底不可用，该次运行仍会失败，只是不再因一次抖动失败。
+2. **`completion_mode` 不反映证据完整度**：`mode=normal` 同时覆盖“事实完整”和“`PARTIAL_DIAGNOSIS`”两种运行。是否让不完全证据降级为 `with_limitations` 属于冻结语义的变更，需要明示决策，不能顺带修改。**待验证前提**：尚需确认“体检数据不完整时，Planner 是否会产出过度自信的建议、而 Reviewer 是否放行”——本次两次尝试读取 Proposal 全文都赶上模型超时，未能取证。
 3. **语义评分表未建立**：4.3 最后一项要落地，需要一个固定的抽查量表（意图识别、设施归类、建议是否越界、Reviewer 是否漏判）。
 4. **长任务与并发**：Agent API 仍是同步执行；任务化/超时/取消未实现。
 

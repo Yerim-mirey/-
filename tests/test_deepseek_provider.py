@@ -51,6 +51,13 @@ def recording_client(*, status_code=200, body=None, raise_error=None, headers=No
 
 
 def adapter(client, **kwargs) -> DeepSeekLLM:
+    """Build an adapter whose retry backoff is virtual, never real.
+
+    The default retry policy would otherwise make every transient-failure test
+    sleep through its backoff, which is slow and says nothing about correctness.
+    Tests that care about the delays pass their own recorder.
+    """
+    kwargs.setdefault("sleep", lambda _seconds: None)
     return DeepSeekLLM("test-key", client=client, **kwargs)
 
 
@@ -256,3 +263,166 @@ def test_render_system_prompt_keeps_the_role_prompt_intact():
     rendered = render_system_prompt("原始提示词", SCHEMA)
     assert rendered.startswith("原始提示词\n\n")
     assert "JSON" in rendered
+
+
+# --- transient-failure retry ------------------------------------------------
+
+
+def json_ok_body(content: str = '{"status": 0}') -> dict:
+    return {
+        "model": "deepseek-flash",
+        "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def scripted_client(outcomes):
+    """A client whose handler raises or answers according to `outcomes`."""
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        outcome = outcomes[min(len(calls) - 1, len(outcomes) - 1)]
+        if isinstance(outcome, Exception):
+            raise outcome
+        status, body = outcome
+        return httpx.Response(status, json=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return client, calls
+
+
+def test_timeout_is_retried_then_succeeds():
+    client, calls = scripted_client([
+        httpx.ReadTimeout("timed out"),
+        httpx.ReadTimeout("timed out"),
+        (200, json_ok_body()),
+    ])
+    sleeps: list[float] = []
+    llm = DeepSeekLLM("k", client=client, sleep=sleeps.append, retry_base_seconds=0.5)
+
+    result = llm.generate_object(
+        system_prompt="s", user_message="u", response_schema={"type": "object"}
+    )
+
+    assert result == {"status": 0}
+    assert len(calls) == 3
+    assert llm.last_attempts == 3
+    # Exponential backoff: 0.5 then 1.0, never a real sleep.
+    assert sleeps == [0.5, 1.0]
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503])
+def test_retryable_http_statuses_are_retried(status_code):
+    client, calls = scripted_client([
+        (status_code, {"error": {"message": "busy"}}),
+        (200, json_ok_body()),
+    ])
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None)
+
+    assert llm.generate_object(
+        system_prompt="s", user_message="u", response_schema={"type": "object"}
+    ) == {"status": 0}
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+def test_permanent_http_statuses_are_not_retried(status_code):
+    """A bad key or malformed request must fail fast, not hide behind retries."""
+    client, calls = scripted_client([(status_code, {"error": {"message": "nope"}})])
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None)
+
+    with pytest.raises(LLMTransportError) as caught:
+        llm.generate_object(
+            system_prompt="s", user_message="u", response_schema={"type": "object"}
+        )
+
+    assert len(calls) == 1
+    assert caught.value.retryable is False
+
+
+def test_empty_content_is_retried_because_it_is_intermittent():
+    """JSON mode documents an occasional empty response; a retry may fix it."""
+    empty = {"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]}
+    client, calls = scripted_client([(200, empty), (200, json_ok_body())])
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None)
+
+    assert llm.generate_object(
+        system_prompt="s", user_message="u", response_schema={"type": "object"}
+    ) == {"status": 0}
+    assert len(calls) == 2
+
+
+def test_truncation_is_not_retried():
+    """Hitting max_tokens is deterministic; a retry would truncate identically."""
+    truncated = {
+        "choices": [{"message": {"content": ""}, "finish_reason": "length"}]
+    }
+    client, calls = scripted_client([(200, truncated)])
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None)
+
+    with pytest.raises(LLMOutputTruncated):
+        llm.generate_object(
+            system_prompt="s", user_message="u", response_schema={"type": "object"}
+        )
+
+    assert len(calls) == 1
+
+
+def test_malformed_content_is_not_retried():
+    client, calls = scripted_client([(200, json_ok_body("not json at all"))])
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None)
+
+    with pytest.raises(LLMResponseError):
+        llm.generate_object(
+            system_prompt="s", user_message="u", response_schema={"type": "object"}
+        )
+
+    assert len(calls) == 1
+
+
+def test_exhausted_retries_report_how_many_were_made():
+    client, calls = scripted_client([httpx.ReadTimeout("down")])
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None, max_retries=2)
+
+    with pytest.raises(LLMTransportError) as caught:
+        llm.generate_object(
+            system_prompt="s", user_message="u", response_schema={"type": "object"}
+        )
+
+    assert len(calls) == 3
+    assert "retried 2 time(s)" in str(caught.value)
+    # The class survives the wrapping so callers still map it correctly.
+    assert type(caught.value) is LLMTransportError
+
+
+def test_zero_retries_disables_the_policy():
+    client, calls = scripted_client([httpx.ReadTimeout("down")])
+    llm = DeepSeekLLM("k", client=client, sleep=lambda _s: None, max_retries=0)
+
+    with pytest.raises(LLMTransportError):
+        llm.generate_object(
+            system_prompt="s", user_message="u", response_schema={"type": "object"}
+        )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kwargs", [{"max_retries": -1}, {"retry_base_seconds": -0.1}])
+def test_invalid_retry_configuration_is_rejected(kwargs):
+    with pytest.raises(ValueError):
+        DeepSeekLLM("k", **kwargs)
+
+
+def test_a_successful_first_attempt_does_not_sleep():
+    client, calls = scripted_client([(200, json_ok_body())])
+    sleeps: list[float] = []
+    llm = DeepSeekLLM("k", client=client, sleep=sleeps.append)
+
+    llm.generate_object(
+        system_prompt="s", user_message="u", response_schema={"type": "object"}
+    )
+
+    assert len(calls) == 1
+    assert sleeps == []
+    assert llm.last_attempts == 1

@@ -94,7 +94,11 @@ RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_llm_live
 
 该脚本每轮恰好发出 3 次请求（每个角色一次），只打印公开摘要，不含密钥、原始提示词或完整模型输出。可用 `RUN_DEEPSEEK_SMOKE_ROUNDS`（上限 5）跑多轮以观察稳定性。它验证的是**输出符合公共 Schema 与确定性引用校验**，不是回答质量；真实语义质量评测属于 Phase 10。
 
-思考模式默认关闭：DeepSeek 的 reasoning tokens 计入 `max_tokens`，结构化抽取的输出很小，开启思考会把预算耗尽并导致 JSON 截断（首次真实调用即遇到）。需要时可用 `thinking=True` 或 `DEEPSEEK_THINKING=1` 开启；命中 `max_tokens` 会抛 `LLMOutputTruncated`，与格式错误明确区分。真实调用观测见 `docs/test-report/phase10-prep-deepseek-adapter-2026-09-22.md`。默认测试完全离线：`tests/test_deepseek_provider.py` 用注入的 `httpx.MockTransport` 断言请求载荷与全部失败分支，真实调用被 `RUN_DEEPSEEK_SMOKE=1` 与 `DEEPSEEK_API_KEY` 双重门控。
+思考模式默认关闭：DeepSeek 的 reasoning tokens 计入 `max_tokens`，结构化抽取的输出很小，开启思考会把预算耗尽并导致 JSON 截断（首次真实调用即遇到）。需要时可用 `thinking=True` 或 `DEEPSEEK_THINKING=1` 开启；命中 `max_tokens` 会抛 `LLMOutputTruncated`，与格式错误明确区分。
+
+**瞬时失败在适配器内重试。** Runner 只对 **Tool** 失败消耗重试预算（`MAX_TOOL_RETRIES`），模型异常会直接让整个 Run 判 `failed`——而一次完整体检的 Run 可能已经跑了好几分钟。因此适配器对**可恢复**的失败做有界重试：网络/超时、HTTP 429 与 5xx、以及 JSON 模式**偶发**的空内容（官方文档说明会偶发返回空）。**不重试**的是确定性失败：密钥或请求被拒（4xx）、`max_tokens` 截断、以及内容不是合法 JSON——同样的请求只会得到同样的结果。默认 `max_retries=2`、指数退避（`retry_base_seconds=0.5`，即 0.5s、1s），可用构造参数或 `sleep` 注入覆盖；`last_attempts` 记录最近一次实际尝试次数，便于诊断，耗尽后异常消息会注明重试了几次。
+
+真实调用观测见 `docs/test-report/phase10-prep-deepseek-adapter-2026-09-22.md`。默认测试完全离线：`tests/test_deepseek_provider.py` 用注入的 `httpx.MockTransport` 断言请求载荷、重试策略与全部失败分支，真实调用被 `RUN_DEEPSEEK_SMOKE=1` 与 `DEEPSEEK_API_KEY` 双重门控。
 
 ### Agent v1 Phase 10：真实链路验收
 

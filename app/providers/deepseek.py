@@ -5,11 +5,22 @@ JSON Schema, so the schema is rendered into the system prompt and the returned
 object is validated by the caller's Pydantic model, exactly as the controlled
 models in tests are. Transport, HTTP, empty-content, and malformed-JSON failures
 are raised as distinct errors so the Runtime can turn them into a failed Run.
+
+Transient failures are retried in-process, because the Runtime deliberately
+retries only *Tool* failures: a single model timeout would otherwise end the
+whole Run as `failed`. In a full diagnosis that Run can already represent
+minutes of work, so one dropped connection must not discard it. Retries are
+bounded and apply only to failures that can plausibly succeed on a second
+attempt — timeouts, connection errors, HTTP 429/5xx, and the documented
+intermittent empty-content response. Malformed or truncated content is not
+retried: the same request would produce the same result.
 """
 
 import json
 import os
-from typing import Any, Mapping
+import time
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import httpx
 
@@ -17,6 +28,8 @@ DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_TOKENS = 8192
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_BASE_SECONDS = 0.5
 API_KEY_ENV = "DEEPSEEK_API_KEY"
 
 
@@ -25,11 +38,27 @@ class LLMError(RuntimeError):
 
 
 class LLMTransportError(LLMError):
-    """The model service could not be reached, timed out, or returned HTTP >= 400."""
+    """The model service could not be reached, timed out, or returned HTTP >= 400.
+
+    ``retryable`` marks the subset that the adapter will attempt again: network
+    and timeout failures, HTTP 429 and HTTP 5xx. Other 4xx codes are permanent.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class LLMResponseError(LLMError):
-    """The model service answered but the payload was empty or not valid JSON."""
+    """The model service answered but the payload was empty or not valid JSON.
+
+    Empty content is the documented intermittent JSON-mode response and is
+    retryable; malformed content is not.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class LLMOutputTruncated(LLMResponseError):
@@ -77,15 +106,27 @@ class DeepSeekLLM:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         thinking: bool = False,
         client: httpx.Client | None = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_base_seconds: float = DEFAULT_RETRY_BASE_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("DeepSeekLLM requires a non-empty API key")
+        if max_retries < 0:
+            raise ValueError("max_retries must not be negative")
+        if retry_base_seconds < 0:
+            raise ValueError("retry_base_seconds must not be negative")
         self.model = model or os.getenv("DEEPSEEK_MODEL") or DEFAULT_MODEL
         self.max_tokens = max_tokens
         # Structured extraction needs the whole budget for the JSON object, so
         # thinking mode is off by default; it can still be enabled per adapter.
         self.thinking = thinking
+        self.max_retries = max_retries
+        self.retry_base_seconds = retry_base_seconds
         self.last_usage: dict[str, Any] | None = None
+        # How many attempts the most recent call needed, for diagnostics.
+        self.last_attempts: int = 0
+        self._sleep = sleep
         self._endpoint = (base_url or os.getenv("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self._client = client or httpx.Client(
             timeout=timeout_seconds,
@@ -124,9 +165,7 @@ class DeepSeekLLM:
             # OpenAI-format toggle; also switchable through DEEPSEEK_THINKING=1.
             "thinking": {"type": "enabled" if self._thinking_enabled() else "disabled"},
         }
-        response = self._post(payload)
-        content, finish_reason = self._content_of(response)
-        return self._parse_object(content, response, finish_reason)
+        return self._with_retry(payload)
 
     def _thinking_enabled(self) -> bool:
         override = os.getenv("DEEPSEEK_THINKING")
@@ -134,14 +173,47 @@ class DeepSeekLLM:
             return override.strip() == "1"
         return self.thinking
 
-    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _with_retry(self, payload: dict[str, Any]) -> Mapping[str, Any]:
+        """Run one completion, retrying only failures that may succeed again.
+
+        The loop covers the whole exchange, not just the HTTP call, because the
+        documented intermittent empty-content response is produced by the
+        payload rather than by the transport. Non-retryable problems (bad key,
+        malformed request, truncated or malformed content) fail immediately so a
+        misconfiguration is not hidden behind retries.
+        """
+        self.last_attempts = 0
+        for attempt in range(self.max_retries + 1):
+            self.last_attempts = attempt + 1
+            try:
+                response = self._post_once(payload)
+                content, finish_reason = self._content_of(response)
+                return self._parse_object(content, response, finish_reason)
+            except LLMError as exc:
+                if not getattr(exc, "retryable", False) or attempt == self.max_retries:
+                    if attempt:
+                        raise type(exc)(
+                            f"{exc} (retried {attempt} time(s), all failed)"
+                        ) from exc
+                    raise
+                # Exponential backoff: base, 2x base, 4x base, ...
+                self._sleep(self.retry_base_seconds * (2 ** attempt))
+        raise AssertionError("unreachable")
+
+    def _post_once(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             response = self._client.post(f"{self._endpoint}/chat/completions", json=payload)
         except httpx.HTTPError as exc:
-            raise LLMTransportError(f"DeepSeek request failed: {exc}") from exc
-        if response.status_code >= 400:
+            # Timeouts and connection resets are the common case here; they are
+            # exactly what a retry is for.
             raise LLMTransportError(
-                f"DeepSeek returned HTTP {response.status_code}: {self._error_detail(response)}"
+                f"DeepSeek request failed: {exc}", retryable=True
+            ) from exc
+        if response.status_code >= 400:
+            retryable = response.status_code == 429 or response.status_code >= 500
+            raise LLMTransportError(
+                f"DeepSeek returned HTTP {response.status_code}: {self._error_detail(response)}",
+                retryable=retryable,
             )
         try:
             return response.json()
@@ -174,7 +246,8 @@ class DeepSeekLLM:
                     "DeepSeek completion hit max_tokens before any JSON content was produced"
                 )
             # Documented JSON-mode behaviour: the API may return empty content.
-            raise LLMResponseError("DeepSeek returned empty content")
+            # It is intermittent, so the same request can succeed on a retry.
+            raise LLMResponseError("DeepSeek returned empty content", retryable=True)
         return content.strip(), finish_reason
 
     def _parse_object(
