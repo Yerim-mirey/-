@@ -7,6 +7,7 @@ exactly that check, plus a clean state that must pass all of them.
 """
 
 import json
+import socket
 from pathlib import Path
 
 import pytest
@@ -156,6 +157,7 @@ def test_an_unknown_evidence_reference_fails_a3():
     score = scored(state)
 
     assert score.checks["A3"] == "fail"
+    assert score.checks["A8"] == "fail"
     assert any("不存在的证据" in note for note in score.notes)
 
 
@@ -245,6 +247,41 @@ def test_a_large_facility_count_is_not_mistaken_for_a_ratio():
     assert score.checks["A5"] == "pass"
 
 
+def test_a_truthful_all_facility_blind_ratio_floor_passes_a5_and_a8():
+    """A lower bound is valid when every cited blind ratio clears it."""
+    state = clean_state()
+    blind_ratios = (0.963167, 0.912205, 0.915672)
+    for metric, blind_ratio in zip(
+        state.evidence.diagnosis.root.data.metrics, blind_ratios, strict=True
+    ):
+        object.__setattr__(metric, "blind_ratio", blind_ratio)
+        object.__setattr__(metric, "covered_ratio", 1 - blind_ratio)
+        object.__setattr__(metric, "unknown_ratio", 0.0)
+    state.planning_proposal.summary = "三类设施的盲区比例均在 90% 以上。"
+
+    score = scored(state)
+
+    assert score.checks["A5"] == "pass"
+    assert score.checks["A8"] == "pass"
+
+
+def test_an_all_facility_floor_fails_if_one_blind_ratio_is_below_it():
+    state = clean_state()
+    blind_ratios = (0.90, 0.89, 0.92)
+    for metric, blind_ratio in zip(
+        state.evidence.diagnosis.root.data.metrics, blind_ratios, strict=True
+    ):
+        object.__setattr__(metric, "blind_ratio", blind_ratio)
+        object.__setattr__(metric, "covered_ratio", 1 - blind_ratio)
+        object.__setattr__(metric, "unknown_ratio", 0.0)
+    state.planning_proposal.summary = "三类设施的盲区比例均在 90% 以上。"
+
+    score = scored(state)
+
+    assert score.checks["A5"] == "fail"
+    assert score.checks["A8"] == "fail"
+
+
 # --- A6 unknown respect -----------------------------------------------------
 
 
@@ -262,6 +299,7 @@ def test_unknown_cells_without_any_caveat_fail_a6():
     score = scored(state)
 
     assert score.checks["A6"] == "fail"
+    assert score.checks["A8"] == "fail"
     assert any("未知" in note for note in score.notes)
 
 
@@ -330,6 +368,37 @@ def test_partial_evidence_without_a_caveat_fails_a7():
     assert score.checks["A7"] == "fail"
 
 
+def test_partial_walking_routes_declared_unavailable_pass_a7():
+    """S3's actual caveat explains which data are partial and how."""
+    state = clean_state()
+    from app.schemas.common import WarningItem
+
+    state.warnings.append(
+        WarningItem(code="PARTIAL_ROUTING_RESULTS", message="采样路线部分不可用。")
+    )
+    state.planning_proposal.limitations = [
+        "存在部分目标点与部分网格步行路线不可用的警告，个别单元可达性判断可能受影响。"
+    ]
+
+    score = scored(state)
+
+    assert score.checks["A7"] == "pass"
+
+
+def test_unrelated_unavailable_item_does_not_cover_partial_routes():
+    state = clean_state()
+    from app.schemas.common import WarningItem
+
+    state.warnings.append(
+        WarningItem(code="PARTIAL_ROUTING_RESULTS", message="采样路线部分不可用。")
+    )
+    state.planning_proposal.limitations = ["步行路线已核查，部分设备不可用。"]
+
+    score = scored(state)
+
+    assert score.checks["A7"] == "fail"
+
+
 # --- A8 reviewer verdict ----------------------------------------------------
 
 
@@ -362,6 +431,42 @@ def test_a_reviewer_rejecting_a_defective_proposal_still_passes_a8():
 
     assert score.checks["A5"] == "fail"
     assert score.checks["A8"] == "pass"
+
+
+# --- standalone live probe setup (with offline transport) ------------------
+
+
+def test_standalone_route_probe_uses_ipv4_before_routing(monkeypatch, capsys):
+    """The probe must observe the same address family as production routing."""
+    from app.providers.baidu import net
+    from app.providers.baidu.routing import BaiduRoutingProvider, ProviderRoute
+    from scripts.verify_routing_live import main as routing_probe_main
+
+    addresses = [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", 443, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
+    ]
+    observed_families = []
+
+    def offline_dns(*args, **kwargs):
+        return addresses
+
+    def offline_route(self, origin, destinations):
+        observed_families.extend(
+            item[0] for item in socket.getaddrinfo("offline.invalid", 443)
+        )
+        return [ProviderRoute(distance_m=800, duration_s=600) for _ in destinations]
+
+    monkeypatch.setenv("BAIDU_MAP_AK", "offline-test-key")
+    monkeypatch.setenv("BAIDU_FORCE_IPV4", "1")
+    monkeypatch.setattr(net, "_original_getaddrinfo", offline_dns)
+    monkeypatch.setattr(socket, "getaddrinfo", offline_dns)
+    monkeypatch.setattr(BaiduRoutingProvider, "route_matrix", offline_route)
+
+    routing_probe_main()
+
+    assert observed_families == [socket.AF_INET]
+    assert "ok: True" in capsys.readouterr().out
 
 
 # --- incomplete run ---------------------------------------------------------

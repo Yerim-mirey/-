@@ -5,12 +5,13 @@ import uuid
 from collections.abc import Callable
 from functools import partial
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.agent_jobs import AgentJobManager, JobCapacityError
 from app.agent_runtime.runner import run_agent
 from app.agent_tools.mvp_gateway import MVPToolGateway
 from app.agents.orchestrator import OrchestratorAgent
@@ -25,7 +26,7 @@ from app.modules.routing.service import RoutingService
 from app.providers.baidu.live import build_live_providers
 from app.providers.deepseek import DeepSeekLLM, api_key_from_env
 from app.schemas.agent import AgentRunState, RunStatus
-from app.schemas.api import AgentRunRequest
+from app.schemas.api import AgentJobAccepted, AgentJobState, AgentRunRequest
 from app.schemas.common import ErrorDetail, Meta
 from app.schemas.diagnosis import DiagnosisFailure, DiagnosisRequest, DiagnosisResult
 from app.schemas.location import LocationFailure, LocationRequest, LocationResult
@@ -147,6 +148,7 @@ def _allowed_origins() -> list[str]:
 
 
 app = FastAPI(title="15 分钟生活圈 Core MVP API", version="1.0")
+agent_job_manager = AgentJobManager()
 app.add_middleware(
     CORSMiddleware, allow_origins=_allowed_origins(),
     allow_methods=["GET", "POST"], allow_headers=["Content-Type"],
@@ -204,6 +206,29 @@ def agent_run_api(
                 ErrorDetail(code="API_ERROR", message="Agent 执行暂不可用。", retryable=False)
             ],
         )
+
+
+@app.post("/api/v1/agent/jobs", response_model=AgentJobAccepted, status_code=202)
+def agent_job_submit_api(
+    request: AgentRunRequest, run: AgentRunner = Depends(get_agent_runner)
+) -> AgentJobAccepted:
+    try:
+        return agent_job_manager.submit(request, run)
+    except JobCapacityError:
+        raise HTTPException(status_code=429, detail="Agent 任务队列已满，请稍后重试。") from None
+
+
+@app.get("/api/v1/agent/jobs/{job_id}", response_model=AgentJobState)
+def agent_job_get_api(job_id: str, response: Response) -> AgentJobState:
+    response.headers["Cache-Control"] = "no-store"
+    job = agent_job_manager.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Agent 任务不存在或已过期。",
+            headers={"Cache-Control": "no-store"},
+        )
+    return job
 
 
 @app.post("/api/v1/location/resolve", response_model=LocationResult)

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.modules.routing.service import RoutingService
+from app.providers.baidu.net import install_ipv4_only
 from app.providers.baidu.routing import BaiduRoutingProvider
 from app.schemas.routing import RoutingRequest
 
@@ -17,6 +18,7 @@ def main() -> None:
     ak = os.environ.get("BAIDU_MAP_AK", "").strip()
     if not ak:
         raise SystemExit("请先设置 BAIDU_MAP_AK。")
+    install_ipv4_only()
     request = RoutingRequest.model_validate(
         {
             "schema_version": "1.0",

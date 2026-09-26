@@ -223,7 +223,8 @@ def score_state(
     score.checks["A4"] = "review" if score.out_of_scope_hits else "pass"
 
     # A5 numbers quoted must match the metrics they name
-    score.checks["A5"] = "pass" if _numbers_consistent(proposal, score) else "fail"
+    metrics = diagnosis.root.data.metrics if diagnosis is not None and diagnosis.root.ok else []
+    score.checks["A5"] = "pass" if _numbers_consistent(proposal, score, metrics) else "fail"
 
     # A6 unknown must not be presented as a settled conclusion
     score.checks["A6"] = "pass" if _unknown_is_respected(proposal, score) else "fail"
@@ -273,7 +274,7 @@ def _metric_ratios(state_metrics: list) -> set[float]:
     return values
 
 
-def _numbers_consistent(proposal, score: Score) -> bool:
+def _numbers_consistent(proposal, score: Score, metrics: list) -> bool:
     """Reject a proposal that states a ratio this run never produced.
 
     Only explicit percentages and 0.xxxx decimals are inspected, so facility
@@ -285,8 +286,15 @@ def _numbers_consistent(proposal, score: Score) -> bool:
         + [item.rationale for item in proposal.recommendations]
         + score_limitations(proposal)
     )
-    for token in _percent_tokens(text):
-        if not any(abs(token - candidate) < 0.005 for candidate in allowed):
+    for sentence in _sentences(text):
+        for token, end in _ratio_mentions(sentence):
+            floor_supported = _supported_ratio_floor(token, sentence, end, metrics)
+            if floor_supported is True:
+                continue
+            if floor_supported is None and any(
+                abs(token - candidate) < 0.005 for candidate in allowed
+            ):
+                continue
             score.notes.append(
                 f"正文出现比例 {token:.4f}，但本次指标只报告了 {sorted(allowed)}"
             )
@@ -294,16 +302,40 @@ def _numbers_consistent(proposal, score: Score) -> bool:
     return True
 
 
-def _percent_tokens(text: str) -> list[float]:
-    """Decimals or percentages written in the text, as fractions."""
+def _ratio_mentions(text: str) -> list[tuple[float, int]]:
+    """Ratio and end offset for each decimal or percentage in a sentence."""
     import re
 
-    found: list[float] = []
-    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*%", text):
-        found.append(round(float(match.group(1)) / 100.0, 4))
-    for match in re.finditer(r"(?<![\d.])0\.\d{2,4}(?![\d])", text):
-        found.append(round(float(match.group(0)), 4))
+    found: list[tuple[float, int]] = []
+    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*%|(?<![\d.])0\.\d{2,4}(?![\d])", text):
+        number = float(match.group(1)) / 100 if match.group(1) else float(match.group(0))
+        found.append((round(number, 4), match.end()))
     return found
+
+
+def _supported_ratio_floor(token: float, sentence: str, end: int, metrics: list) -> bool | None:
+    """Accept an explicit lower bound only when each named metric satisfies it."""
+    import re
+
+    if not re.match(r"\s*(?:及)?以上", sentence[end:]):
+        return None
+    # Each comma-delimited clause describes one metric and one facility scope.
+    clause = sentence[:end].rsplit("，", 1)[-1].rsplit(",", 1)[-1]
+    ratio_name = "blind_ratio" if "盲区" in clause else (
+        "covered_ratio" if "覆盖" in clause else None
+    )
+    if ratio_name is None:
+        return False
+    named = [
+        metric for metric in metrics
+        if FACILITY_LABELS.get(metric.facility_type.value, "") in clause
+    ]
+    applicable = named or metrics
+    return bool(applicable) and all(
+        getattr(metric, ratio_name) is not None
+        and float(getattr(metric, ratio_name)) >= token
+        for metric in applicable
+    )
 
 
 def _unknown_is_respected(proposal, score: Score) -> bool:
@@ -323,25 +355,38 @@ def _unknown_is_respected(proposal, score: Score) -> bool:
 
 def _limitations_cover(proposal, score: Score) -> bool:
     """Applicable caveats must appear somewhere in the stated limitations."""
-    text = " ".join(score_limitations(proposal))
+    limitations = score_limitations(proposal)
+    text = " ".join(limitations)
     required: list[str] = []
-    if score.confidence == "low":
+    if score.confidence == "low" and not _has_any(text, ("置信度", "confidence")):
         required.append("置信度")
-    if INCOMPLETE_CODES & set(score.warning_codes):
+    warnings = INCOMPLETE_CODES & set(score.warning_codes)
+    if "PARTIAL_ROUTING_RESULTS" in warnings and not _partial_caveat(limitations, routing=True):
         required.append("partial")
-    missing = [word for word in required
-               if not _has_any(text, (word, _synonym(word)))]
-    if missing:
-        score.notes.append(f"limitations 未覆盖：{missing}")
+    elif warnings and not _partial_caveat(limitations, routing=False):
+        required.append("partial")
+    if required:
+        score.notes.append(f"limitations 未覆盖：{required}")
         return False
     return True
 
 
-def _synonym(word: str) -> str:
-    return {
-        "置信度": "confidence",
-        "partial": "不完整",
-    }.get(word, word)
+def _partial_caveat(limitations: list[str], *, routing: bool) -> bool:
+    """Require a relevant source and explicit incompleteness in one sentence."""
+    import re
+
+    sources = ("路线", "路径", "算路", "可达性") if routing else (
+        "数据", "证据", "诊断", "结果", "POI", "路线", "路径", "算路", "可达性"
+    )
+    partial = ("部分", "个别", "一些", "不完整", "未全部", "partial")
+    unavailable = ("不可用", "无法获取", "未获取", "缺失", "失败", "不完整", "受限", "不足")
+    return any(
+        _has_any(sentence, sources)
+        and _has_any(sentence, partial)
+        and _has_any(sentence, unavailable)
+        for limitation in limitations
+        for sentence in re.split(r"[。；;，,\n]", limitation)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

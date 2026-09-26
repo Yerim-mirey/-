@@ -158,7 +158,17 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 - `run_id` 可省略，服务端会自动生成合法的 `run:*`；客户端传入的值同样按共享 `RunId` 规则校验，格式不对就是 422 而不是 500。
 - 缺少服务端密钥时返回 `status=failed` 且 `errors[].code` 明确为 `LLM_KEY_MISSING` 或 `BAIDU_AK_MISSING`——这是部署没配好，不是调用方写错了，所以不用 5xx 表达。密钥值本身绝不进入响应。
 - 构造 runner **不发任何网络请求**；真实调用只在执行时发生，并复用上面的按 AK 配额预算。
-- 当前仍是**同步**执行：一次完整体检约需十分钟，HTTP 连接会一直挂着。这适合受控单用户演示；公网形态需要任务化（`POST` 返回 `202 + job_id`、`GET` 查询状态）与超时/取消，尚未实现，见 `API_交接说明_2026-09-22.md` 第 7.2 节。
+- 这个兼容入口仍是**同步**执行：一次完整体检可能需要数分钟，HTTP 连接会一直挂着。前端新页面应使用下面的任务接口。
+
+`POST /api/v1/agent/jobs` 接收与同步入口相同的请求体，立即返回 HTTP 202。例如：
+
+```json
+{"schema_version":"1.0","job_id":"job:0123456789abcdef0123456789abcdef","run_id":"run:api-0123456789abcdef","status":"queued","status_url":"/api/v1/agent/jobs/job:0123456789abcdef0123456789abcdef"}
+```
+
+前端按 `status_url` 调用 `GET /api/v1/agent/jobs/{job_id}`。查询结果包含 `job_id`、`run_id`、`status`、`created_at`、`updated_at` 和 `result`；运行前 `result=null`，结束后 `result` 是完整的 `AgentRunState`。任务状态为 `queued`、`running`、`completed`、`waiting_for_input` 或 `failed`。`completed`、`waiting_for_input`、`failed` 是终态；前端仍须读取 `result.status`、`completion_mode`、`warnings` 和 `errors`。查询响应禁用缓存，未知或过期的任务返回 404。
+
+演示服务器只支持**单进程、一个执行中任务加一个排队任务**；第三个同时提交的任务返回 429。终态结果保存 15 分钟，最多保留最近 32 条，进程重启后全部丢失。当前没有取消任务接口；如果前端遇到 429，应提示稍后重试，不要自动连续重发，以免重复消耗地图和模型额度。
 
 项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景、Phase 9 的真实 Core Service 适配器离线验证、按 AK 共享的配额保护，以及 Agent Run 的 HTTP 入口；真实模型与真实 Gateway 的完整 Agent 链路验收（Phase 10）进行中。详见 `docs/architecture/core-mvp.md`。
 

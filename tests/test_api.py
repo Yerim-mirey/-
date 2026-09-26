@@ -1,16 +1,20 @@
 """HTTP adapter checks; no test contacts Baidu."""
 
 import json
+import time
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import agent_jobs
 from app.api import main as api
+from app.api.agent_jobs import AgentJobManager
 from app.providers.baidu.geocoding import GeocodingMatch
 from app.schemas.agent import AgentRunState, RunStatus
-from app.schemas.common import CenterPoint
+from app.schemas.common import CenterPoint, ErrorDetail
 from app.schemas.diagnosis import DiagnosisResult
 from app.schemas.location import LocationResult
 
@@ -358,3 +362,128 @@ def test_agent_run_does_not_touch_the_network_when_misconfigured(monkeypatch):
     runner = api.get_agent_runner()
 
     assert callable(runner)
+
+
+def test_agent_job_accepts_and_returns_a_final_run(client, monkeypatch, isolated_agent_jobs):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("BAIDU_MAP_AK", "ak-present")
+
+    accepted = client.post(
+        "/api/v1/agent/jobs",
+        json={"schema_version": "1.0", "user_message": "查一下菜市场", "run_id": "run:caller-job"},
+    )
+
+    assert accepted.status_code == 202
+    assert accepted.json()["run_id"] == "run:caller-job"
+    assert accepted.json()["status_url"] == f"/api/v1/agent/jobs/{accepted.json()['job_id']}"
+    polled = client.get(accepted.json()["status_url"])
+    assert polled.status_code == 200
+    assert polled.headers["cache-control"] == "no-store"
+    assert polled.json()["run_id"] == "run:caller-job"
+    final = _wait_for_job(client, accepted.json()["status_url"], "failed")
+    assert final["result"]["run_id"] == "run:caller-job"
+    assert final["result"]["errors"][0]["code"] == api.MISSING_LLM_KEY_CODE
+
+
+@pytest.fixture
+def isolated_agent_jobs(monkeypatch):
+    manager = AgentJobManager()
+    monkeypatch.setattr(api, "agent_job_manager", manager)
+    yield manager
+    manager.close()
+
+
+def _wait_for_job(client, status_url: str, status: str) -> dict:
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        response = client.get(status_url)
+        if response.status_code == 200 and response.json()["status"] == status:
+            return response.json()
+        time.sleep(0.01)
+    pytest.fail(f"Agent job did not reach {status}")
+
+
+def test_agent_jobs_are_bounded_to_one_running_and_one_queued(client, isolated_agent_jobs):
+    started = Event()
+    release = Event()
+
+    def controlled(request):
+        started.set()
+        assert release.wait(3)
+        return AgentRunState(
+            schema_version="1.0", run_id=request.run_id, status=RunStatus.FAILED,
+            user_message=request.user_message,
+            errors=[ErrorDetail(code="CONTROLLED", message="测试任务结束。", retryable=False)],
+        )
+
+    api.app.dependency_overrides[api.get_agent_runner] = lambda: controlled
+    payload = {"schema_version": "1.0", "user_message": "测试排队"}
+    try:
+        first = client.post("/api/v1/agent/jobs", json=payload)
+        assert first.status_code == 202
+        assert started.wait(1)
+        second = client.post("/api/v1/agent/jobs", json=payload)
+        assert second.status_code == 202
+        assert second.json()["status"] == "queued"
+        assert client.get(first.json()["status_url"]).json()["status"] == "running"
+        assert client.get(second.json()["status_url"]).json()["status"] == "queued"
+        overflow = client.post("/api/v1/agent/jobs", json=payload)
+        assert overflow.status_code == 429
+        release.set()
+        final = _wait_for_job(client, first.json()["status_url"], "failed")
+        assert final["result"]["errors"][0]["code"] == "CONTROLLED"
+        assert final["result"]["run_id"] == first.json()["run_id"]
+        assert final["created_at"] <= final["updated_at"]
+        _wait_for_job(client, second.json()["status_url"], "failed")
+    finally:
+        release.set()
+
+
+def test_agent_jobs_unknown_id_returns_uncached_404(client, isolated_agent_jobs):
+    response = client.get("/api/v1/agent/jobs/job:" + "0" * 32)
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_agent_job_runner_exception_is_sanitized(client, isolated_agent_jobs):
+    def broken(_request):
+        raise RuntimeError("test-secret-do-not-return")
+
+    api.app.dependency_overrides[api.get_agent_runner] = lambda: broken
+    accepted = client.post(
+        "/api/v1/agent/jobs", json={"schema_version": "1.0", "user_message": "测试失败"}
+    )
+    assert accepted.status_code == 202
+    final = _wait_for_job(client, accepted.json()["status_url"], "failed")
+    assert final["result"]["errors"][0]["code"] == "API_ERROR"
+    assert final["result"]["run_id"] == accepted.json()["run_id"]
+    assert "test-secret-do-not-return" not in json.dumps(final, ensure_ascii=False)
+
+
+def test_agent_job_expired_result_returns_404(client, isolated_agent_jobs, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    accepted = client.post(
+        "/api/v1/agent/jobs", json={"schema_version": "1.0", "user_message": "测试过期"}
+    )
+    assert accepted.status_code == 202
+    _wait_for_job(client, accepted.json()["status_url"], "failed")
+    monkeypatch.setattr(agent_jobs, "RESULT_TTL", agent_jobs.timedelta(0))
+    expired = client.get(accepted.json()["status_url"])
+    assert expired.status_code == 404
+    assert expired.headers["cache-control"] == "no-store"
+
+
+def test_agent_job_history_is_bounded(client, isolated_agent_jobs, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(agent_jobs, "MAX_RETAINED_RESULTS", 1)
+    first = client.post(
+        "/api/v1/agent/jobs", json={"schema_version": "1.0", "user_message": "第一次"}
+    )
+    assert first.status_code == 202
+    _wait_for_job(client, first.json()["status_url"], "failed")
+    second = client.post(
+        "/api/v1/agent/jobs", json={"schema_version": "1.0", "user_message": "第二次"}
+    )
+    assert second.status_code == 202
+    _wait_for_job(client, second.json()["status_url"], "failed")
+    assert client.get(first.json()["status_url"]).status_code == 404
