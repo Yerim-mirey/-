@@ -6,7 +6,7 @@ from app.schemas.agent_v2 import AgentBriefV2, AgentIntentV2
 from app.schemas.common import CenterPoint
 from app.schemas.diagnosis_v2 import DiagnosisDataV2, FacilityEvidenceV2
 from app.schemas.location import LocationData, LocationResult, LocationSuccess, LocationSource
-from app.schemas.poi_v2 import POISearchDataV2, POISearchSuccessV2, POIResultV2, FacilityCountV2, FacilityQueryFailureV2
+from app.schemas.poi_v2 import POISearchDataV2, POISearchSuccessV2, POISearchFailureV2, POIResultV2, FacilityCountV2, FacilityQueryFailureV2
 from app.schemas.routing import RoutingResult, RoutingSuccess
 from app.schemas.routing_v2 import RoutingResponseV2
 from app.schemas.planning_v2 import PlanningIssueV2, PlanningProposalV2, PlanningRecommendationV2, PlanningReviewResultV2
@@ -457,3 +457,77 @@ def test_same_map_poi_classified_in_two_facilities_gets_unique_route_target_ids(
     assert len(set(target_ids)) == 2
     assert routing.ok is True
     assert {item.facility_id for item in routing.routes} == {"market", "convenience_store"}
+
+
+def test_timed_out_category_is_reported_as_missing_evidence_not_as_absence():
+    """V2 runs on a 3-second POI timeout, so timeouts are an expected failure.
+
+    A timed-out category must stay visibly unknown: it is neither counted as
+    zero facilities nor left to read as "this area has none".
+    """
+    poi_result = POISearchSuccessV2(ok=True, data=POISearchDataV2(
+        center=_location().root.data.center,
+        pois=[_pois().data.pois[0]],
+        counts=[
+            FacilityCountV2(facility_id="market", count=1, status="complete"),
+            FacilityCountV2(facility_id="pharmacy", count=None, status="unavailable"),
+        ],
+        failed_queries=[
+            FacilityQueryFailureV2(
+                facility_id="pharmacy", query_term="药店", error_code="TIMEOUT", retryable=True
+            ),
+        ],
+    ))
+    result = run_agent_v2(
+        run_id="run:timeout-limits", user_message="查附近菜市场和药店",
+        orchestrator=FixedOrchestrator(_brief(ids=("market", "pharmacy"))),
+        gateway=FixedGateway(
+            FixedPOIService(poi_result), FixedLocationResolver(_location()), FixedRoutingService(None)
+        ),
+    )
+
+    timeout_limits = [item for item in result.limitations if "超时" in item]
+    assert timeout_limits, result.limitations
+    assert any("没有此类设施" in item for item in timeout_limits)
+    pharmacy = next(item for item in poi_result.data.counts if item.facility_id == "pharmacy")
+    assert pharmacy.status == "unavailable"
+    assert pharmacy.count is None
+
+
+def test_timed_out_poi_request_is_not_reported_as_zero_facilities():
+    failure = POISearchFailureV2(
+        ok=False, error_code="TIMEOUT", message="设施地图检索超时。", retryable=True
+    )
+    result = run_agent_v2(
+        run_id="run:timeout-envelope", user_message="查附近药店",
+        orchestrator=FixedOrchestrator(_brief(ids=("pharmacy",))),
+        gateway=FixedGateway(
+            FixedPOIService(failure), FixedLocationResolver(_location()), FixedRoutingService(None)
+        ),
+    )
+
+    assert any("超时" in item and "没有此类设施" in item for item in result.limitations)
+    assert any("没有将失败解释为设施数量为零" in item for item in result.limitations)
+
+
+def test_any_failed_query_keeps_the_unknown_is_not_zero_caveat():
+    """The caveat cannot depend on the failure code we happened to special-case."""
+    poi_result = POISearchSuccessV2(ok=True, data=POISearchDataV2(
+        center=_location().root.data.center,
+        pois=[],
+        counts=[FacilityCountV2(facility_id="pharmacy", count=None, status="unavailable")],
+        failed_queries=[
+            FacilityQueryFailureV2(
+                facility_id="pharmacy", query_term="药店", error_code="NETWORK_ERROR", retryable=True
+            ),
+        ],
+    ))
+    result = run_agent_v2(
+        run_id="run:network-error-limits", user_message="查附近药店",
+        orchestrator=FixedOrchestrator(_brief(ids=("pharmacy",))),
+        gateway=FixedGateway(
+            FixedPOIService(poi_result), FixedLocationResolver(_location()), FixedRoutingService(None)
+        ),
+    )
+
+    assert any("不等于该地区没有此类设施" in item for item in result.limitations)

@@ -536,7 +536,9 @@ def _result_limitations(poi_results, brief, catalog):
     for envelope in poi_results:
         if isinstance(envelope, POISearchSuccessV2):
             if envelope.data.failed_queries:
-                limits.append("部分设施关键词查询失败或超出本次检索预算，相关类别结果可能不完整。")
+                limits.append("部分设施关键词查询失败或超出本次检索预算，相关类别结果可能不完整；查询失败表示未取得证据，不等于该地区没有此类设施。")
+            if any(item.error_code == "TIMEOUT" for item in envelope.data.failed_queries):
+                limits.append("百度地图 POI 检索超时，相关类别本次未取得证据；超时不代表该地区没有此类设施。")
             if any(item.error_code == "RATE_LIMITED" for item in envelope.data.failed_queries):
                 limits.append("百度地图 POI 检索触发限额，部分设施类别尚未查询；不能把不可用结果当作没有设施。")
             if any(item.error_code == "RUN_DEADLINE_EXCEEDED" for item in envelope.data.failed_queries):
@@ -546,6 +548,8 @@ def _result_limitations(poi_results, brief, catalog):
                     limits.append(f"{catalog.get(count.facility_id).name_zh}检索不完整；检索数量不能视为完整供给总量。")
         elif isinstance(envelope, POISearchFailureV2):
             limits.append("地图 POI 服务请求失败；没有将失败解释为设施数量为零。")
+            if envelope.error_code == "TIMEOUT":
+                limits.append("百度地图 POI 检索超时，本次未取得该地区的设施证据；超时不代表该地区没有此类设施。")
             if envelope.error_code == "RATE_LIMITED":
                 limits.append("百度地图 POI 检索触发限额，未完成的设施类别尚未查询。")
             if envelope.error_code == "RUN_DEADLINE_EXCEEDED":

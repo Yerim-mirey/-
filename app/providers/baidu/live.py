@@ -83,11 +83,13 @@ def build_live_providers(ak: str) -> LiveProviders:
     )
 
 
-# V2 spends a whole-run budget (three minutes, at most 60 keywords) inside one
-# POI search, so it deliberately uses a tighter profile than the v1 default of a
-# 10-second timeout and every available page. Keeping the difference here, in the
-# single assembly point, is what stops the API tool endpoints and the V2 Gateway
-# from drifting apart or holding two separate quota guards.
+# V2 spends a whole-run budget inside one POI search: at most 60 keywords
+# against a 180-second deadline (POIServiceV2.MAX_SEARCH_TERMS_PER_REQUEST and
+# DEFAULT_SEARCH_DEADLINE_SECONDS). Three seconds is that budget divided by those
+# keywords, so one slow page cannot swallow a large share of the sweep; a longer
+# timeout would directly cut how many categories ever get queried. The trade is
+# that timeouts become an expected failure mode, which is why Runtime reports a
+# timed-out category as missing evidence — never as an area without facilities.
 V2_POI_TIMEOUT_SECONDS = 3.0
 V2_POI_MAX_PAGES = 2
 
