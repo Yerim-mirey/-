@@ -1,0 +1,15 @@
+{
+  "schema_version": "2.0",
+  "run_id": "run:v2-example",
+  "status": "failed",
+  "user_message": "武汉市武昌区中南路附近有哪些菜市场和药店？",
+  "poi_results": [],
+  "limitations": [],
+  "errors": [
+    {
+      "code": "LLM_KEY_MISSING",
+      "message": "服务端模型密钥未配置。",
+      "retryable": false
+    }
+  ]
+}

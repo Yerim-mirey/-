@@ -1,6 +1,8 @@
 # 15分钟生活圈智能体检与规划助手
 ## Core MVP 开发交接文档 v1.1
 
+> **历史产品计划快照**：本文记录 2026-09-18 的 Core MVP 规划，不代表当前代码状态。当前实施进度与 API 以[最新接手交接](../DeepSeek接手交接_截至AgentPhase9_2026-09-22.md)和[Phase 10 补测记录](../test-report/phase10-semantic-sampling-supplement-2026-09-24.md)为准。
+
 **项目阶段：** Core App MVP / Contract-first Tool Architecture  
 **日期：** 2026-09-18  
 **赛题：** 【开源 AI 工具赛道】基于地图开放能力的“15分钟生活圈”智能体检与规划助手

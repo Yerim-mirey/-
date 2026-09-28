@@ -194,10 +194,17 @@ def score_state(
     bundle = state.evidence
     proposal = state.planning_proposal
     review = state.review_result
-    if bundle is None or proposal is None or review is None:
-        score.notes.append("缺少 Evidence/Proposal/Review，规划路径未完成")
-        for name in ("A3", "A5", "A6", "A7", "A8"):
+    missing = [
+        label for value, label in (
+            (bundle, "Evidence"), (proposal, "Proposal"), (review, "Review")
+        ) if value is None
+    ]
+    if missing:
+        score.notes.append(f"缺少 {'/'.join(missing)}，规划路径未完成或无法完整评分")
+    if bundle is None or proposal is None:
+        for name in ("A3", "A5", "A6", "A7"):
             score.checks[name] = "fail"
+        score.checks["A8"] = "n/a"
         return score
 
     diagnosis = bundle.diagnosis
@@ -233,18 +240,22 @@ def score_state(
     score.checks["A7"] = "pass" if _limitations_cover(proposal, score) else "fail"
 
     # A8 reviewer verdict must match the proposal's quality
-    severe = [name for name in ("A3", "A5", "A6") if score.checks[name] == "fail"]
-    approved = review.status.value == "approved"
-    score.checks["A8"] = "fail" if (approved and severe) else "pass"
-    if score.checks["A8"] == "fail":
-        score.notes.append(f"Reviewer 放行了存在 {severe} 缺陷的提案")
+    if review is None:
+        score.checks["A8"] = "n/a"
+    else:
+        severe = [name for name in ("A3", "A5", "A6") if score.checks[name] == "fail"]
+        approved = review.status.value == "approved"
+        score.checks["A8"] = "fail" if (approved and severe) else "pass"
+        if score.checks["A8"] == "fail":
+            score.notes.append(f"Reviewer 放行了存在 {severe} 缺陷的提案")
 
     score.proposal_summary = proposal.summary
     score.limitations = list(score_limitations(proposal))
     score.recommendation_titles = [item.title for item in proposal.recommendations]
     score.recommendation_actions = [list(item.actions) for item in proposal.recommendations]
-    score.review_status = review.status.value
-    score.review_issue_messages = [item.message for item in review.issues]
+    if review is not None:
+        score.review_status = review.status.value
+        score.review_issue_messages = [item.message for item in review.issues]
     return score
 
 

@@ -1,0 +1,31 @@
+{
+  "schema_version": "2.0",
+  "intent": "facility_query",
+  "user_goal": "查询附近图书馆",
+  "location": {
+    "lng": 114.3,
+    "lat": 30.5,
+    "crs": "BD09LL",
+    "type": "coordinate"
+  },
+  "facility_ids": [
+    "library"
+  ],
+  "unresolved_mentions": [],
+  "exploratory_terms": [],
+  "exploratory_only": false,
+  "capability_limitations": [
+    {
+      "facility_id": "library",
+      "unsupported_capabilities": [
+        "diagnosis",
+        "planning"
+      ],
+      "message": "当前目录未授权该设施类别进行标准诊断或规划。"
+    }
+  ],
+  "needs_diagnosis": false,
+  "needs_planning": false,
+  "needs_review": false,
+  "missing_information": []
+}

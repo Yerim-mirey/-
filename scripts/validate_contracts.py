@@ -27,13 +27,34 @@ from app.schemas.location import LocationRequest, LocationResult
 from app.schemas.isochrone import IsochroneRequest, IsochroneResult
 from app.schemas.poi import POISearchRequest, POISearchResult
 from app.schemas.routing import RoutingRequest, RoutingResult
+from app.schemas.agent_v2 import AgentBriefRequestV2, AgentBriefV2
+from app.schemas.diagnosis_v2 import DiagnosisDataV2
+from app.schemas.facility_catalog import FacilityCatalogResultV2
+from app.schemas.poi_v2 import POISearchRequestV2, POISearchResultV2
+from app.schemas.routing_v2 import RoutingRequestV2, RoutingResponseV2
+from app.schemas.agent_jobs_v2 import (
+    AgentJobAcceptedV2,
+    AgentJobStateV2,
+    AgentRunRequestV2,
+)
+from app.schemas.agent_run_v2 import AgentRunStateV2
+from app.schemas.planning_v2 import (
+    PlanningEvidenceBundleV2,
+    PlanningProposalV2,
+    PlanningReviewResultV2,
+)
 
 
 CONTRACTS = ROOT / "contracts" / "v1"
+CONTRACTS_V2 = ROOT / "contracts" / "v2"
 
 
 def load(name: str) -> dict:
     return json.loads((CONTRACTS / name).read_text(encoding="utf-8"))
+
+
+def load_v2(name: str) -> dict:
+    return json.loads((CONTRACTS_V2 / name).read_text(encoding="utf-8"))
 
 
 def must_reject(model: type, payload: dict) -> None:
@@ -84,6 +105,22 @@ def main() -> None:
     ReviewResult.model_validate(load("agent-review-result.example.json"))
     AgentRunState.model_validate(load("agent-run-state.example.json"))
 
+    FacilityCatalogResultV2.model_validate(load_v2("facility-catalog.example.json"))
+    POISearchRequestV2.model_validate(load_v2("poi-search-request.example.json"))
+    POISearchResultV2.model_validate(load_v2("poi-search-result.example.json"))
+    RoutingRequestV2.model_validate(load_v2("routing-request.example.json"))
+    RoutingResponseV2.model_validate(load_v2("routing-result.example.json"))
+    DiagnosisDataV2.model_validate(load_v2("diagnosis-result.example.json"))
+    AgentBriefV2.model_validate(load_v2("agent-brief.example.json"))
+    AgentBriefRequestV2.model_validate(load_v2("agent-brief-request.example.json"))
+    AgentRunRequestV2.model_validate(load_v2("agent-job-request.example.json"))
+    AgentJobAcceptedV2.model_validate(load_v2("agent-job-accepted.example.json"))
+    AgentRunStateV2.model_validate(load_v2("agent-run-state.example.json"))
+    AgentJobStateV2.model_validate(load_v2("agent-job-state.example.json"))
+    PlanningEvidenceBundleV2.model_validate(load_v2("planning-evidence.example.json"))
+    PlanningProposalV2.model_validate(load_v2("planning-proposal.example.json"))
+    PlanningReviewResultV2.model_validate(load_v2("planning-review-result.example.json"))
+
     must_reject(
         CenterPoint,
         {"lng": 181, "lat": 31.2, "crs": "BD09LL"},
@@ -125,7 +162,7 @@ def main() -> None:
     mixed_diagnosis["error"] = load("diagnosis-failure.example.json")["error"]
     must_reject(DiagnosisResult, mixed_diagnosis)
 
-    print("Core MVP Tool 1-6 and Agent v1 contracts validated successfully.")
+    print("Core MVP Tool 1-6 and Agent v1/v2 contracts validated successfully.")
 
 
 if __name__ == "__main__":

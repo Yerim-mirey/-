@@ -445,7 +445,7 @@ def test_agent_jobs_unknown_id_returns_uncached_404(client, isolated_agent_jobs)
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_agent_job_runner_exception_is_sanitized(client, isolated_agent_jobs):
+def test_agent_job_runner_exception_is_sanitized(client, isolated_agent_jobs, caplog):
     def broken(_request):
         raise RuntimeError("test-secret-do-not-return")
 
@@ -458,6 +458,10 @@ def test_agent_job_runner_exception_is_sanitized(client, isolated_agent_jobs):
     assert final["result"]["errors"][0]["code"] == "API_ERROR"
     assert final["result"]["run_id"] == accepted.json()["run_id"]
     assert "test-secret-do-not-return" not in json.dumps(final, ensure_ascii=False)
+    assert accepted.json()["job_id"] in caplog.text
+    assert accepted.json()["run_id"] in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "test-secret-do-not-return" not in caplog.text
 
 
 def test_agent_job_expired_result_returns_404(client, isolated_agent_jobs, monkeypatch):

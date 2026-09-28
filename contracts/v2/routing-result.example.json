@@ -1,0 +1,28 @@
+{
+  "schema_version": "2.0",
+  "provider": "baidu",
+  "ok": true,
+  "routes": [
+    {
+      "target_id": "library-1",
+      "facility_id": "library",
+      "location": {
+        "lng": 114.31,
+        "lat": 30.5,
+        "crs": "BD09LL"
+      },
+      "status": "success",
+      "distance_m": 820,
+      "duration_s": 610
+    }
+  ],
+  "summary": {
+    "requested": 1,
+    "success": 1,
+    "no_route": 0,
+    "unavailable": 0
+  },
+  "error_code": null,
+  "message": null,
+  "retryable": null
+}

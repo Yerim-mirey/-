@@ -634,6 +634,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "routes_per_second": guard.routes_per_second,
                 "max_batch_routes": guard.max_batch_routes,
                 "granted_routes": guard.granted_routes,
+                "granted_calls": guard.granted_calls,
+                "granted_quota_units": guard.granted_quota_units,
             }
         payload = {
             "model": getattr(model, "model", type(model).__name__),

@@ -1,6 +1,7 @@
 """HTTP adapter for the existing Core contracts and the Agent Runtime."""
 
 import os
+import logging
 import uuid
 from collections.abc import Callable
 from functools import partial
@@ -12,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.agent_jobs import AgentJobManager, JobCapacityError
+from app.api.v2 import router as v2_router
 from app.agent_runtime.runner import run_agent
 from app.agent_tools.mvp_gateway import MVPToolGateway
 from app.agents.orchestrator import OrchestratorAgent
@@ -35,6 +37,7 @@ from app.schemas.location import LocationFailure, LocationRequest, LocationResul
 LocationRunner = Callable[[LocationRequest], LocationResult]
 DiagnosisRunner = Callable[[DiagnosisRequest], DiagnosisResult]
 AgentRunner = Callable[[AgentRunRequest], AgentRunState]
+logger = logging.getLogger(__name__)
 
 # Raised into the Run when the server is not configured for real Agent work.
 # It is a normal `failed` terminal state, not an HTTP error: the request was
@@ -147,7 +150,8 @@ def _allowed_origins() -> list[str]:
     return origins
 
 
-app = FastAPI(title="15 分钟生活圈 Core MVP API", version="1.0")
+app = FastAPI(title="15 分钟生活圈 Core MVP API", version="2.0")
+app.include_router(v2_router)
 agent_job_manager = AgentJobManager()
 app.add_middleware(
     CORSMiddleware, allow_origins=_allowed_origins(),
@@ -185,10 +189,14 @@ def agent_run_api(
     """
     try:
         return run(request)
-    except Exception:
+    except Exception as exc:
         # `run_agent` already converts its own failures into a failed Run, so
         # reaching here means the runner itself broke. Report it in the state
         # rather than leaking an internal message.
+        logger.error(
+            "unexpected_api_failure endpoint=agent/runs run_id=%s exception_class=%s",
+            _run_id(request), type(exc).__name__,
+        )
         return AgentRunState(
             schema_version="1.0",
             run_id=_run_id(request),
@@ -235,7 +243,11 @@ def agent_job_get_api(job_id: str, response: Response) -> AgentJobState:
 def location_api(request: LocationRequest, run: LocationRunner = Depends(get_location_runner)) -> LocationResult:
     try:
         return run(request)
-    except Exception:
+    except Exception as exc:
+        logger.error(
+            "unexpected_api_failure endpoint=location/resolve exception_class=%s",
+            type(exc).__name__,
+        )
         return _location_failure("PROVIDER_ERROR", "位置解析暂不可用。")
 
 
@@ -243,5 +255,9 @@ def location_api(request: LocationRequest, run: LocationRunner = Depends(get_loc
 def diagnosis_api(request: DiagnosisRequest, run: DiagnosisRunner = Depends(get_diagnosis_runner)) -> DiagnosisResult:
     try:
         return run(request)
-    except Exception:
+    except Exception as exc:
+        logger.error(
+            "unexpected_api_failure endpoint=diagnosis exception_class=%s",
+            type(exc).__name__,
+        )
         return _diagnosis_failure("COMPUTATION_ERROR", "社区体检暂不可用。")

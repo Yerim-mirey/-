@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ AgentRunner = Callable[[AgentRunRequest], AgentRunState]
 TERMINAL = {AgentJobStatus.COMPLETED, AgentJobStatus.WAITING_FOR_INPUT, AgentJobStatus.FAILED}
 RESULT_TTL = timedelta(minutes=15)
 MAX_RETAINED_RESULTS = 32
+logger = logging.getLogger(__name__)
 
 
 class JobCapacityError(Exception):
@@ -96,7 +98,11 @@ class AgentJobManager:
                 RunStatus.COMPLETED, RunStatus.WAITING_FOR_INPUT, RunStatus.FAILED,
             }:
                 raise ValueError("Agent runner returned an invalid terminal state")
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "unexpected_api_failure endpoint=agent/jobs job_id=%s run_id=%s exception_class=%s",
+                job.job_id, job.run_id, type(exc).__name__,
+            )
             result = AgentRunState(
                 schema_version="1.0",
                 run_id=job.run_id,

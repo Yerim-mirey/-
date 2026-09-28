@@ -1,0 +1,7 @@
+{
+  "schema_version": "2.0",
+  "job_id": "job:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "run_id": "run:v2-example",
+  "status": "queued",
+  "status_url": "/api/v2/agent/jobs/job:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

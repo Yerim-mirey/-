@@ -504,3 +504,18 @@ def test_a_run_without_a_brief_fails_a1():
 
     assert score.checks["A1"] == "fail"
     assert any("没有 Brief" in note for note in score.notes)
+
+
+def test_missing_review_does_not_erase_available_evidence_and_proposal_scores():
+    state = clean_state()
+    object.__setattr__(state, "review_result", None)
+
+    score = scored(state)
+
+    assert score.checks["A3"] == "pass"
+    assert score.checks["A5"] == "pass"
+    assert score.checks["A6"] == "pass"
+    assert score.checks["A7"] == "pass"
+    assert score.checks["A8"] == "n/a"
+    assert score.proposal_summary == state.planning_proposal.summary
+    assert score.review_status is None

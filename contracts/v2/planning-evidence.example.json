@@ -1,0 +1,17 @@
+{
+  "schema_version": "2.0",
+  "evidence_bundle_id": "run:v2-example:planning-evidence",
+  "items": [
+    {
+      "facility_id": "market",
+      "facility_name": "菜市场与农贸市场",
+      "poi_count": 1,
+      "poi_status": "complete",
+      "reachable_count": null,
+      "covered_ratio": null,
+      "metric_status": "partial",
+      "source": "baidu_poi_plus_v2_diagnosis",
+      "evidence_id": "run:v2-example:evidence:market"
+    }
+  ]
+}

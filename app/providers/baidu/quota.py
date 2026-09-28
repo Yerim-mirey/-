@@ -11,13 +11,10 @@ front of the HTTP call — while leaving the Tool contracts untouched:
 
 * one :class:`BaiduQuotaGuard` per AK, shared process-wide, so every provider
   built for that AK queues behind the same budget;
-* the budget is counted in **route targets**, not HTTP calls, because the
-  console meters destinations;
-* a rolling one-second window admits at most ``routes_per_second`` route
-  targets. That single constraint holds the average rate down: because every
-  admitted request is recorded, the cumulative total can never exceed
-  ``routes_per_second`` per elapsed second, and a batch can never be larger
-  than the whole window's budget;
+* a route target consumes one quota unit; a geocoding or POI HTTP request
+  consumes one quota unit. A rolling one-second window admits at most
+  ``routes_per_second`` units, so all Baidu calls share one conservative
+  process-wide budget;
 * requests wait for their turn in FIFO order and only fail once
   ``max_wait_seconds`` would be exceeded.
 
@@ -54,13 +51,20 @@ WAITER_TICK_SECONDS = 0.05
 class QuotaExceededError(RuntimeError):
     """The shared guard refused a call because it would wait too long."""
 
-    def __init__(self, message: str, *, waited_seconds: float) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        waited_seconds: float,
+        deadline_exceeded: bool = False,
+    ) -> None:
         super().__init__(message)
         self.waited_seconds = waited_seconds
+        self.deadline_exceeded = deadline_exceeded
 
 
 class BaiduQuotaGuard:
-    """Thread-safe sliding-window limiter counting route targets per AK."""
+    """Thread-safe sliding-window limiter counting conservative quota units per AK."""
 
     def __init__(
         self,
@@ -89,10 +93,24 @@ class BaiduQuotaGuard:
         self._lock = threading.Lock()
         self._grants: deque[tuple[float, int]] = deque()
         self._total_granted = 0
+        self._total_routes = 0
+        self._total_calls = 0
 
     @property
     def granted_routes(self) -> int:
         """Route targets granted so far; used by acceptance reporting."""
+        with self._lock:
+            return self._total_routes
+
+    @property
+    def granted_calls(self) -> int:
+        """Non-routing Baidu HTTP calls admitted by this guard."""
+        with self._lock:
+            return self._total_calls
+
+    @property
+    def granted_quota_units(self) -> int:
+        """All routing-target and non-routing call units admitted so far."""
         with self._lock:
             return self._total_granted
 
@@ -101,8 +119,10 @@ class BaiduQuotaGuard:
         """Largest single request this budget admits inside one window."""
         return max(1, int(self.routes_per_second * self.window_seconds))
 
-    def acquire_routes(self, targets: int) -> None:
-        """Reserve ``targets`` route targets, blocking until the budget allows it."""
+    def acquire_routes(
+        self, targets: int, *, deadline_monotonic: float | None = None
+    ) -> None:
+        """Reserve route-target units, blocking until the budget allows them."""
         if isinstance(targets, bool) or not isinstance(targets, int) or targets <= 0:
             raise ValueError("targets 必须是正整数。")
         if targets > self.max_batch_routes:
@@ -110,26 +130,66 @@ class BaiduQuotaGuard:
                 f"单批 {targets} 个目标超过每秒 {self.routes_per_second:g} 的配额，"
                 "必须先拆批。"
             )
+        self._acquire_units(
+            targets, route_targets=targets, calls=0,
+            deadline_monotonic=deadline_monotonic,
+        )
+
+    def acquire_call(self, *, deadline_monotonic: float | None = None) -> None:
+        """Reserve one non-route HTTP-call unit (geocoding or POI page)."""
+        self._acquire_units(
+            1, route_targets=0, calls=1, deadline_monotonic=deadline_monotonic
+        )
+
+    def _acquire_units(
+        self,
+        units: int,
+        *,
+        route_targets: int,
+        calls: int,
+        deadline_monotonic: float | None = None,
+    ) -> None:
         started = self._clock()
         with self._lock:
             while True:
-                wait = self._wait_seconds_locked(targets)
-                if wait <= 0:
-                    self._grant_locked(targets)
-                    return
-                if self._clock() - started + wait > self.max_wait_seconds:
+                now = self._clock()
+                deadline_remaining = (
+                    None if deadline_monotonic is None else deadline_monotonic - now
+                )
+                if deadline_remaining is not None and deadline_remaining <= 0:
                     raise QuotaExceededError(
-                        "百度配额等待超出上限，已放弃本次调用。",
-                        waited_seconds=self._clock() - started,
+                        "本次运行已达到时间预算，已放弃百度地图请求。",
+                        waited_seconds=now - started,
+                        deadline_exceeded=True,
+                    )
+                wait = self._wait_seconds_locked(units)
+                if wait <= 0:
+                    self._grant_locked(units, route_targets=route_targets, calls=calls)
+                    return
+                wait_budget = self.max_wait_seconds - (now - started)
+                if deadline_remaining is not None:
+                    wait_budget = min(wait_budget, deadline_remaining)
+                if wait > wait_budget:
+                    message = (
+                        "本次运行已达到时间预算，已放弃百度地图请求。"
+                        if deadline_remaining is not None and wait > deadline_remaining
+                        else "百度配额等待超出上限，已放弃本次调用。"
+                    )
+                    raise QuotaExceededError(
+                        message,
+                        waited_seconds=now - started,
+                        deadline_exceeded=(
+                            deadline_remaining is not None
+                            and wait > deadline_remaining
+                        ),
                     )
                 # Waiting threads sleep in longer steps than the tick that
                 # admitted them: they only need their turn to arrive, and a
                 # tight loop would spin the lock under concurrency.
-                self._sleep(max(wait, WAITER_TICK_SECONDS))
-
-    def acquire_call(self) -> None:
-        """Reserve one non-route call (geocoding, POI page) against the same AK."""
-        self.acquire_routes(1)
+                sleep_seconds = max(wait, WAITER_TICK_SECONDS)
+                if deadline_remaining is not None:
+                    sleep_seconds = min(sleep_seconds, deadline_remaining)
+                self._sleep(sleep_seconds)
 
     def _wait_seconds_locked(self, targets: int) -> float:
         now = self._clock()
@@ -145,9 +205,11 @@ class BaiduQuotaGuard:
         # which is what makes the rate hold over any one-second interval.
         return max(0.0, self.window_seconds - (now - self._grants[0][0]))
 
-    def _grant_locked(self, targets: int) -> None:
-        self._grants.append((self._clock(), targets))
-        self._total_granted += targets
+    def _grant_locked(self, units: int, *, route_targets: int, calls: int) -> None:
+        self._grants.append((self._clock(), units))
+        self._total_granted += units
+        self._total_routes += route_targets
+        self._total_calls += calls
 
 
 _GUARDS: dict[str, BaiduQuotaGuard] = {}
@@ -201,12 +263,15 @@ class QuotaSnapshot:
     max_wait_seconds: float
     max_batch_routes: int
     granted_routes: int
+    granted_calls: int
+    granted_quota_units: int
 
     def describe(self) -> str:
         return (
-            f"{self.routes_per_second:g} 目标/秒，窗口 {self.window_seconds:g}s，"
+            f"{self.routes_per_second:g} 配额单位/秒，窗口 {self.window_seconds:g}s，"
             f"最大单批 {self.max_batch_routes}，最长等待 {self.max_wait_seconds:g}s，"
-            f"已放行 {self.granted_routes} 个目标"
+            f"已放行路线目标 {self.granted_routes}，其他请求 {self.granted_calls}，"
+            f"配额单位 {self.granted_quota_units}"
         )
 
 
@@ -217,4 +282,6 @@ def snapshot(guard: BaiduQuotaGuard) -> QuotaSnapshot:
         max_wait_seconds=guard.max_wait_seconds,
         max_batch_routes=guard.max_batch_routes,
         granted_routes=guard.granted_routes,
+        granted_calls=guard.granted_calls,
+        granted_quota_units=guard.granted_quota_units,
     )

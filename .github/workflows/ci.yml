@@ -1,0 +1,28 @@
+name: Offline backend checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.lock
+      - name: Validate v1 contracts
+        run: python scripts/validate_contracts.py
+      - name: Run offline tests
+        env:
+          BAIDU_MAP_AK: ""
+          RUN_BAIDU_SMOKE: ""
+          DEEPSEEK_API_KEY: ""
+          RUN_DEEPSEEK_SMOKE: ""
+        run: python -m pytest -q -p no:cacheprovider

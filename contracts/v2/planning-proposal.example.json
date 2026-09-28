@@ -1,0 +1,48 @@
+{
+  "schema_version": "2.0",
+  "catalog_version": "2026.1",
+  "proposal_id": "plan_example",
+  "planning_round": 1,
+  "evidence_bundle_id": "run:v2-example:planning-evidence",
+  "summary": "建议先核对地图点位对应的实际设施，再结合现场资料完善分析。",
+  "issues": [
+    {
+      "issue_id": "issue_example",
+      "facility_id": "market",
+      "title": "设施属性待核实",
+      "description": "地图检索点位尚需与实际服务设施核对。",
+      "priority": "medium",
+      "evidence_refs": ["run:v2-example:evidence:market"]
+    }
+  ],
+  "recommendations": [
+    {
+      "recommendation_id": "recommendation_example",
+      "facility_id": "market",
+      "title": "开展点位核验",
+      "rationale": "当前证据反映地图收录情况，不能代替现场核实。",
+      "priority": "medium",
+      "actions": ["核对设施位置与服务属性。"],
+      "evidence_refs": ["run:v2-example:evidence:market"]
+    }
+  ],
+  "quantitative_claims": [],
+  "unsupported_dimensions": [
+    {
+      "facility_id": "market",
+      "planning_supported": true,
+      "unsupported_dimensions": [
+        "population_capacity",
+        "operating_status",
+        "opening_hours",
+        "price_affordability",
+        "service_quality",
+        "service_eligibility",
+        "accessibility_barriers",
+        "demand_supply_balance",
+        "spatial_coverage"
+      ],
+      "explanation": "仅支持基于已列 POI 与步行路线证据的有限建议；人口覆盖、容量、运营和服务质量等维度未评估。"
+    }
+  ]
+}

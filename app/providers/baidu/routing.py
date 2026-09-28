@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import socket
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -65,7 +66,11 @@ class BaiduRoutingProvider:
         return min(MAX_ROUTES, self._quota_guard.max_batch_routes)
 
     def route_matrix(
-        self, origin: CenterPoint, destinations: Sequence[CenterPoint]
+        self,
+        origin: CenterPoint,
+        destinations: Sequence[CenterPoint],
+        *,
+        deadline_monotonic: float | None = None,
     ) -> list[ProviderRoute]:
         if not 1 <= len(destinations) <= MAX_ROUTES:
             raise BaiduRoutingError(
@@ -75,8 +80,16 @@ class BaiduRoutingProvider:
             )
         if self._quota_guard is not None:
             try:
-                self._quota_guard.acquire_routes(len(destinations))
-            except QuotaExceededError:
+                self._quota_guard.acquire_routes(
+                    len(destinations), deadline_monotonic=deadline_monotonic
+                )
+            except QuotaExceededError as exc:
+                if exc.deadline_exceeded:
+                    raise BaiduRoutingError(
+                        "TIMEOUT",
+                        "本次运行已达到时间预算，已跳过步行路线请求。",
+                        retryable=False,
+                    ) from None
                 raise BaiduRoutingError(
                     "RATE_LIMITED", QUOTA_MESSAGE, retryable=True
                 ) from None
@@ -87,9 +100,14 @@ class BaiduRoutingProvider:
             "output": "json",
             "ak": self._api_key,
         }
-        payload = self._transport(
-            f"{ROUTING_URL}?{urlencode(params)}", self._timeout_seconds
-        )
+        timeout_seconds = self._timeout_seconds
+        if deadline_monotonic is not None:
+            timeout_seconds = min(timeout_seconds, deadline_monotonic - time.monotonic())
+            if timeout_seconds <= 0:
+                raise BaiduRoutingError(
+                    "TIMEOUT", "本次运行已达到时间预算，已跳过步行路线请求。", retryable=False
+                )
+        payload = self._transport(f"{ROUTING_URL}?{urlencode(params)}", timeout_seconds)
         status = _as_int(payload.get("status"))
         if status != 0:
             raise _status_error(status)

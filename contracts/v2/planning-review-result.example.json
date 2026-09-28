@@ -1,0 +1,9 @@
+{
+  "schema_version": "2.0",
+  "status": "approved",
+  "reviewed_proposal_id": "plan_example",
+  "reviewed_planning_round": 1,
+  "reviewed_evidence_bundle_id": "run:v2-example:planning-evidence",
+  "issues": [],
+  "revision_instructions": []
+}

@@ -132,20 +132,75 @@ def _analyze(request, route, isochrone, cells, to_m, to_center) -> BlindspotResu
         origin_xy = clipped.representative_point()
         origin = to_center(origin_xy.x, origin_xy.y)
         candidates = {
-            facility: [poi for poi in by_type[facility]
-                       if math.dist((origin_xy.x, origin_xy.y), poi_xy[poi.poi_id]) <= request.service_distance_m + 1e-6]
+            facility: sorted(
+                [poi for poi in by_type[facility]
+                 if math.dist((origin_xy.x, origin_xy.y), poi_xy[poi.poi_id])
+                 <= request.service_distance_m + 1e-6],
+                key=lambda poi: (math.dist((origin_xy.x, origin_xy.y), poi_xy[poi.poi_id]), poi.poi_id),
+            )
             for facility in requested
         }
-        unique = {poi.poi_id: poi for group in candidates.values() for poi in group}
-        ordered = [unique[poi_id] for poi_id in sorted(unique)]
-        remaining = request.max_route_pairs - route_requested
-        selected = ordered[:remaining]
-        if len(selected) < len(ordered):
+        measured: dict[str, RouteResult | None] = {}
+        while True:
+            next_targets = []
+            for facility in requested:
+                group = candidates[facility]
+                already_covered = any(
+                    item is not None
+                    and item.status is RouteStatus.SUCCESS
+                    and item.distance_m <= request.service_distance_m
+                    for poi in group
+                    if (item := measured.get(poi.poi_id)) is not None
+                )
+                if already_covered:
+                    continue
+                next_poi = next((poi for poi in group if poi.poi_id not in measured), None)
+                if next_poi is not None:
+                    next_targets.append(next_poi)
+            unique = {poi.poi_id: poi for poi in next_targets}
+            ordered = sorted(
+                unique.values(),
+                key=lambda poi: (
+                    math.dist((origin_xy.x, origin_xy.y), poi_xy[poi.poi_id]),
+                    poi.poi_id,
+                ),
+            )
+            remaining = request.max_route_pairs - route_requested
+            if not ordered:
+                break
+            selected = ordered[:remaining]
+            if len(selected) < len(ordered):
+                budget_exhausted = True
+            if not selected:
+                budget_exhausted = True
+                break
+            batch_results, provider_failed = _measure(origin, selected, route, warnings)
+            route_requested += len(selected)
+            route_succeeded += sum(
+                item is not None and item.status is RouteStatus.SUCCESS
+                for item in batch_results.values()
+            )
+            route_unavailable += sum(
+                item is None or item.status is RouteStatus.UNAVAILABLE
+                for item in batch_results.values()
+            )
+            measured.update(batch_results)
+            if provider_failed:
+                # A failed/mismatched batch is a provider-level gap; more
+                # candidates at this cell cannot establish coverage safely.
+                break
+
+        if route_requested >= request.max_route_pairs and any(
+            any(poi.poi_id not in measured for poi in candidates[facility])
+            and not any(
+                measured.get(poi.poi_id) is not None
+                and measured[poi.poi_id].status is RouteStatus.SUCCESS
+                and measured[poi.poi_id].distance_m <= request.service_distance_m
+                for poi in candidates[facility]
+            )
+            for facility in requested
+        ):
             budget_exhausted = True
-        measured = _measure(origin, selected, route, warnings)
-        route_requested += len(selected)
-        route_succeeded += sum(item is not None and item.status is RouteStatus.SUCCESS for item in measured.values())
-        route_unavailable += sum(item is None or item.status is RouteStatus.UNAVAILABLE for item in measured.values())
 
         for facility in requested:
             group = candidates[facility]
@@ -221,9 +276,14 @@ def _analyze(request, route, isochrone, cells, to_m, to_center) -> BlindspotResu
     return result
 
 
-def _measure(origin: CenterPoint, selected: list[POI], route: Route, warnings: list[WarningItem]) -> dict[str, RouteResult | None]:
+def _measure(
+    origin: CenterPoint,
+    selected: list[POI],
+    route: Route,
+    warnings: list[WarningItem],
+) -> tuple[dict[str, RouteResult | None], bool]:
     if not selected:
-        return {}
+        return {}, False
     request = RoutingRequest(
         schema_version="1.0", origin=origin,
         targets=[RouteTarget(target_id=poi.poi_id, location=poi.location) for poi in selected],
@@ -232,10 +292,10 @@ def _measure(origin: CenterPoint, selected: list[POI], route: Route, warnings: l
     try:
         response = route(request).root
     except Exception:
-        return {poi.poi_id: None for poi in selected}
+        return {poi.poi_id: None for poi in selected}, True
     warnings.extend(response.warnings)
     if not isinstance(response, RoutingSuccess) or response.data.origin != origin:
-        return {poi.poi_id: None for poi in selected}
+        return {poi.poi_id: None for poi in selected}, True
     expected = {poi.poi_id: poi.location for poi in selected}
     found: dict[str, RouteResult | None] = {}
     for item in response.data.routes:
@@ -244,7 +304,7 @@ def _measure(origin: CenterPoint, selected: list[POI], route: Route, warnings: l
                 found[item.target_id] = None
             else:
                 found[item.target_id] = item
-    return {poi.poi_id: found.get(poi.poi_id) for poi in selected}
+    return {poi.poi_id: found.get(poi.poi_id) for poi in selected}, False
 
 
 def _geojson(geometry: BaseGeometry, to_center: Callable[[float, float], CenterPoint]) -> dict:

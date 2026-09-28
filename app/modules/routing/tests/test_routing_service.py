@@ -1,3 +1,5 @@
+import time
+
 from app.modules.routing.service import RoutingService
 from app.providers.baidu.routing import BaiduRoutingError, ProviderRoute
 from app.schemas.routing import RouteStatus, RoutingRequest
@@ -152,3 +154,21 @@ def test_a_provider_error_without_a_message_falls_back_to_the_constant():
 
     assert result.ok is False
     assert result.error.message.strip() != ""
+
+
+def test_expired_run_deadline_skips_all_route_batches():
+    class NeverCalled:
+        def __init__(self):
+            self.calls = 0
+
+        def route_matrix(self, *_args, **_kwargs):
+            self.calls += 1
+            raise AssertionError("expired run must not reach the provider")
+
+    provider = NeverCalled()
+    result = RoutingService(provider).route(
+        request_with(2), deadline_monotonic=time.monotonic() - 1
+    ).root
+
+    assert result.ok is False
+    assert provider.calls == 0

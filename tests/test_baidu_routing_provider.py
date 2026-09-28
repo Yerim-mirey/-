@@ -50,6 +50,24 @@ def test_provider_rejects_more_than_fifty_destinations() -> None:
     assert caught.value.code == "INVALID_REQUEST"
 
 
+def test_expired_run_deadline_prevents_route_transport():
+    called = False
+
+    def transport(*_args):
+        nonlocal called
+        called = True
+        return {"status": 0, "result": []}
+
+    provider = BaiduRoutingProvider("secret", transport=transport)
+    with pytest.raises(BaiduRoutingError) as caught:
+        provider.route_matrix(
+            ORIGIN, DESTINATIONS[:1], deadline_monotonic=0.0
+        )
+
+    assert caught.value.code == "TIMEOUT"
+    assert not called
+
+
 @pytest.mark.parametrize(
     ("status", "code", "retryable"),
     [

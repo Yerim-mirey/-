@@ -11,7 +11,9 @@ import pytest
 from app.agent_tools.mvp_gateway import MVPToolGateway
 from app.modules.routing.service import RoutingService
 from app.providers.baidu import quota as quota_module
+from app.providers.baidu.geocoding import BaiduGeocodingError, BaiduGeocodingProvider
 from app.providers.baidu.live import build_live_providers
+from app.providers.baidu.poi import BaiduPOIProvider, POIProviderError
 from app.providers.baidu.quota import (
     BaiduQuotaGuard,
     QuotaExceededError,
@@ -146,6 +148,53 @@ def test_refuses_when_wait_exceeds_budget():
         guard.acquire_routes(3)
 
     assert excinfo.value.waited_seconds >= 0
+
+
+def test_quota_wait_is_capped_by_run_deadline():
+    clock = FakeClock()
+    guard = BaiduQuotaGuard(clock=clock.monotonic, sleep=clock.sleep)
+    guard.acquire_routes(3)
+
+    with pytest.raises(QuotaExceededError, match="时间预算"):
+        guard.acquire_routes(3, deadline_monotonic=clock.now + 0.25)
+
+    assert clock.now <= 1_000.25
+    assert snapshot(guard).granted_routes == 3
+
+
+def test_provider_adapters_preserve_deadline_exhaustion_as_non_retryable():
+    guard = BaiduQuotaGuard()
+    center = point(121.5)
+    providers = [
+        (
+            BaiduGeocodingProvider("ak", quota_guard=guard),
+            lambda provider: provider.geocode("上海市人民广场", deadline_monotonic=0),
+            BaiduGeocodingError,
+            "TIMEOUT",
+        ),
+        (
+            BaiduPOIProvider(ak="ak", quota_guard=guard),
+            lambda provider: provider.search(
+                "药店", center, 500, deadline_monotonic=0
+            ),
+            POIProviderError,
+            "RUN_DEADLINE_EXCEEDED",
+        ),
+        (
+            BaiduRoutingProvider("ak", quota_guard=guard),
+            lambda provider: provider.route_matrix(
+                center, [point(121.501)], deadline_monotonic=0
+            ),
+            BaiduRoutingError,
+            "TIMEOUT",
+        ),
+    ]
+
+    for provider, invoke, error_type, expected_code in providers:
+        with pytest.raises(error_type) as caught:
+            invoke(provider)
+        assert caught.value.code == expected_code
+        assert caught.value.retryable is False
 
 
 def test_over_window_batch_is_rejected_before_any_call():
@@ -398,3 +447,16 @@ def test_gateway_from_ak_does_not_issue_network_calls(monkeypatch):
     gateway = MVPToolGateway.from_baidu_ak("ak-quiet")
 
     assert gateway.quota_guard is not None
+
+
+def test_route_target_counter_excludes_geocoding_and_poi_call_units():
+    clock = FakeClock()
+    guard = BaiduQuotaGuard(clock=clock.monotonic, sleep=clock.sleep)
+
+    guard.acquire_routes(2)
+    guard.acquire_call()
+
+    current = snapshot(guard)
+    assert current.granted_routes == 2
+    assert current.granted_calls == 1
+    assert current.granted_quota_units == 3

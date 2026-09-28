@@ -1,6 +1,8 @@
 """Location Tool service orchestration."""
 
 from collections.abc import Callable
+import inspect
+import time
 
 from app.providers.baidu.geocoding import BaiduGeocodingError, GeocodingMatch
 from app.schemas.common import CenterPoint, Meta
@@ -23,6 +25,8 @@ Geocode = Callable[[str, str | None], GeocodingMatch]
 def resolve_location(
     request: LocationRequest,
     geocode: Geocode | None = None,
+    *,
+    deadline_monotonic: float | None = None,
 ) -> LocationResult:
     """Resolve one validated Location request into the public envelope."""
 
@@ -54,7 +58,19 @@ def resolve_location(
         )
 
     try:
-        match = geocode(request.input.query, request.input.city)
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise BaiduGeocodingError(
+                LocationErrorCode.TIMEOUT,
+                "本次运行已达到时间预算，已跳过地址解析请求。",
+                retryable=False,
+            )
+        if deadline_monotonic is not None and "deadline_monotonic" in inspect.signature(geocode).parameters:
+            match = geocode(
+                request.input.query, request.input.city,
+                deadline_monotonic=deadline_monotonic,
+            )
+        else:
+            match = geocode(request.input.query, request.input.city)
     except BaiduGeocodingError as exc:
         return _failure(
             code=exc.code,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -65,11 +66,23 @@ class BaiduGeocodingProvider:
     def quota_guard(self) -> BaiduQuotaGuard | None:
         return self._quota_guard
 
-    def geocode(self, query: str, city: str | None = None) -> GeocodingMatch:
+    def geocode(
+        self,
+        query: str,
+        city: str | None = None,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> GeocodingMatch:
         if self._quota_guard is not None:
             try:
-                self._quota_guard.acquire_call()
-            except QuotaExceededError:
+                self._quota_guard.acquire_call(deadline_monotonic=deadline_monotonic)
+            except QuotaExceededError as exc:
+                if exc.deadline_exceeded:
+                    raise BaiduGeocodingError(
+                        LocationErrorCode.TIMEOUT,
+                        "本次运行已达到时间预算，已跳过地址解析请求。",
+                        retryable=False,
+                    ) from None
                 raise BaiduGeocodingError(
                     "RATE_LIMITED", QUOTA_MESSAGE, retryable=True
                 ) from None
@@ -83,7 +96,16 @@ class BaiduGeocodingProvider:
             params["city"] = city
 
         url = f"{GEOCODING_URL}?{urlencode(params)}"
-        payload = self._transport(url, self._timeout_seconds)
+        timeout_seconds = self._timeout_seconds
+        if deadline_monotonic is not None:
+            timeout_seconds = min(timeout_seconds, deadline_monotonic - time.monotonic())
+            if timeout_seconds <= 0:
+                raise BaiduGeocodingError(
+                    LocationErrorCode.TIMEOUT,
+                    "本次运行已达到时间预算，已跳过地址解析请求。",
+                    retryable=False,
+                )
+        payload = self._transport(url, timeout_seconds)
         status = payload.get("status")
 
         if status != 0:

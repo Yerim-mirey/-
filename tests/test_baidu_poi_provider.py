@@ -95,6 +95,26 @@ def test_inaccurate_total_and_short_page_do_not_stop_search() -> None:
     assert calls == [0, 1, 2]
 
 
+def test_configured_page_limit_returns_partial_records_with_incomplete_marker() -> None:
+    calls: list[int] = []
+
+    def http_get(url: str, *, timeout: float) -> _Response:
+        page = int(parse_qs(urlsplit(url).query)["page_num"][0])
+        calls.append(page)
+        return _Response({
+            "status": 0,
+            "results": [{"name": f"POI {page}", "location": {"lng": 1, "lat": 2}}],
+        })
+
+    provider = BaiduPOIProvider(ak="test-ak", http_get=http_get, max_pages=2)
+    with pytest.raises(POIProviderError) as caught:
+        provider.search("图书馆", CenterPoint(lng=1, lat=2, crs="BD09LL"), 100)
+
+    assert caught.value.code == "INCOMPLETE_RESULTS"
+    assert [item.name for item in caught.value.partial_results] == ["POI 0", "POI 1"]
+    assert calls == [0, 1]
+
+
 def test_api_error_does_not_echo_ak() -> None:
     provider = BaiduPOIProvider(
         ak="secret-ak",

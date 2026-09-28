@@ -1,6 +1,6 @@
 # 15 分钟生活圈助手 — Core Tool 基线
 
-本仓库以 Tool 1–6 的现有 Contract/Schema 和实现作为后续 API、Web 的唯一核心基线。六个 Tool 已有离线测试；队友在 2026-09-22 按当时百度控制台的 3 QPS 上限完成一次真实端到端验收，记录见 `docs/test-report/tool1-6-formal-acceptance-2026-09-22.md`，旧的限流失败记录保留作历史。正式 Service 尚无跨请求共享限速，API 接手要求见 `API_交接说明_2026-09-22.md`。
+本仓库以 Tool 1–6 的现有 Contract/Schema 和实现作为后续 API、Web 的唯一核心基线。六个 Tool 有离线测试；队友在 2026-09-22 按当时百度控制台的 3 QPS 上限完成一次真实端到端验收，记录见 `docs/test-report/tool1-6-formal-acceptance-2026-09-22.md`，旧的限流失败记录保留作历史。正式 Service 已有按 AK 共享的进程内限速；单进程演示版 Agent 长任务入口和 Phase 10 语义补测结果见下方与 `docs/test-report/phase10-semantic-sampling-supplement-2026-09-24.md`。
 
 ## 当前内容
 
@@ -13,7 +13,7 @@
 | `app/modules/isochrone/` | 已从同一交付包合入 Isochrone Service、Contract、测试和去敏样例；它复用 Routing，不直接调用百度 |
 | `app/modules/blindspot/` | 已实现网格裁剪、步行路由判定、盲区/未知区及离线测试；含保存的真实等时圈样本处理测试 |
 | `app/modules/diagnosis/` | 已实现 Tool 1–5 编排、设施指标与部分失败语义；有完整 Mock 集成测试 |
-| `app/api/main.py` | FastAPI 薄接口：健康检查、Location、Diagnosis；直接复用现有 Tool Contract |
+| `app/api/main.py`、`app/api/agent_jobs.py` | FastAPI 薄接口：健康检查、Location、Diagnosis、同步 Agent Run 与有限容量的 Agent Job 轮询；直接复用现有 Tool Contract |
 | `data/`、`docs/`、`demo/` | 保存去敏样本、架构与验收记录、现有地图 Demo；正式 Web 尚待开发 |
 
 ### Agent v1 Phase 1
@@ -47,7 +47,7 @@ Phase 9 的 `MVPToolGateway` 实现同一接口，复用 `tests/test_mock_tool_g
 
 ### Agent v1 Phase 5：Reviewer Agent
 
-`app/agents/reviewer.py` 使用同一模型接口审查证据包与规划提案，返回 `approved`、`revision_required` 或 `insufficient_evidence` 的 `ReviewResult`。输入提案和输出审查结果的身份、轮次及引用均会核对；事实、数字和过度推断由模型按提示词审查。当前只有受控输出的离线测试，真实审查质量需接入模型后评测。Reviewer 不调用 Tool 或决定 Runtime 下一节点。
+`app/agents/reviewer.py` 使用同一模型接口审查证据包与规划提案，返回 `approved`、`revision_required` 或 `insufficient_evidence` 的 `ReviewResult`。输入提案和输出审查结果的身份、轮次及引用均会核对；结构或绑定校验失败时只追加一次带脱敏字段错误摘要的修复请求，仍失败则明确失败，不会伪造通过。事实、数字和过度推断由模型按提示词审查；真实语义质量仍需持续评测。Reviewer 不调用 Tool 或决定 Runtime 下一节点。
 
 ### Agent v1 Phase 6：Runtime State + Conditions
 
@@ -77,7 +77,7 @@ env -u BAIDU_MAP_AK -u RUN_BAIDU_SMOKE python -m pytest tests/e2e -q
 
 `app/agent_tools/mvp_gateway.py` 把现有六个 `ToolGateway` 方法直接映射到 Core Service：Location、POI、Routing、Isochrone、Blindspot 和 Diagnosis。构造时复用一组 Provider/Service，完整体检仍由 Tool 6 `diagnose` 编排；Agent、Graph 与 Runner 不改写。`MVPToolGateway.from_baidu_ak(ak)` 只构造 Provider，真正调用方法才可能联网。Phase 9 测试注入假 Provider、封锁 socket，并用同一个 `run_agent` 验证只替换 Gateway 的流程。
 
-该阶段的验证完全离线。队友的 2026-09-22 真实 Tool 验收使用临时节流器；正式 API/Service 仍缺按 AK 共享的批量算路限速与长任务保护，在补齐之前不要用这个 Gateway 并发运行真实完整诊断。Phase 9 记录见 `docs/test-report/phase9-mvp-tool-gateway-2026-09-22.md`。
+该阶段的验证完全离线。队友的 2026-09-22 真实 Tool 验收使用临时节流器；正式 API/Service 后续已加按 AK 共享的进程内批量算路限速，并新增单进程 Agent 长任务轮询入口。多进程配额共享仍未实现。Phase 9 记录见 `docs/test-report/phase9-mvp-tool-gateway-2026-09-22.md`。
 
 `docs/项目进度交接_截至Phase8及Phase10准备_2026-09-22.md` 等较早文档是当时的进度快照；其中“Phase 9 未开始”已由本节和 Phase 9 报告更新。
 
@@ -116,7 +116,7 @@ RUN_BAIDU_SMOKE=1 RUN_DEEPSEEK_SMOKE=1 python -m scripts.verify_agent_live_e2e a
 
 ### 百度配额与限速
 
-Core Tool 与 Agent 的真相层共用同一份按 AK 的配额预算。`app/providers/baidu/quota.py` 的 `BaiduQuotaGuard` 是进程内按 AK 共享的滑动窗口：一秒窗口内最多放行 `routes_per_second` 个**算路目标**。这条窗口约束本身就能压住速率——每个被放行的请求都会被记录，所以累计放行量不可能超过「配额 × 已流逝秒数」；单批上限（`max_batch_routes`）又保证一个请求吃不下整个窗口。**不要把「配置的速率」误当成「请求之间必须隔多久」**：曾有一版额外强制最小间隔，结果在窗口还有余量时也把请求拒之门外一整个窗口，并发下 8 个目标实测从预算要求的 1.00 秒劣化到 5.03 秒，已删除（`77165bd`）。请求按 FIFO 排队，只有等待超过 `max_wait_seconds` 才会拒绝，并表现为既有契约里可重试的 `RATE_LIMITED`。`RoutingService` 的拆批大小由 Provider 提供的 `max_batch_routes` 决定，因此配额窗口会直接决定拆批粒度，而不是写死的 50。
+Core Tool 与 Agent 的真相层共用同一份按 AK 的配额预算。`app/providers/baidu/quota.py` 的 `BaiduQuotaGuard` 是进程内按 AK 共享的滑动窗口：一秒窗口内最多放行 `routes_per_second` 个**配额单位**：每个步行路线目标占 1 单位，每次地理编码或 POI 请求占 1 单位。监控会分别报告路线目标数、其他地图请求数和总单位数。这条窗口约束本身就能压住速率——每个被放行的请求都会被记录，所以累计放行量不可能超过「配额 × 已流逝秒数」；单批上限（`max_batch_routes`）又保证一个请求吃不下整个窗口。**不要把「配置的速率」误当成「请求之间必须隔多久」**：曾有一版额外强制最小间隔，结果在窗口还有余量时也把请求拒之门外一整个窗口，并发下 8 个目标实测从预算要求的 1.00 秒劣化到 5.03 秒，已删除（`77165bd`）。请求按 FIFO 排队，只有等待超过 `max_wait_seconds` 才会拒绝，并表现为既有契约里可重试的 `RATE_LIMITED`。`RoutingService` 的拆批大小由 Provider 提供的 `max_batch_routes` 决定，因此配额窗口会直接决定拆批粒度，而不是写死的 50。
 
 默认值对应免费版（3 目标/秒）；付费配额通过环境变量调整，密钥与配额参数都只从本机环境读取：
 
@@ -170,13 +170,15 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 
 演示服务器只支持**单进程、一个执行中任务加一个排队任务**；第三个同时提交的任务返回 429。终态结果保存 15 分钟，最多保留最近 32 条，进程重启后全部丢失。当前没有取消任务接口；如果前端遇到 429，应提示稍后重试，不要自动连续重发，以免重复消耗地图和模型额度。
 
-项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景、Phase 9 的真实 Core Service 适配器离线验证、按 AK 共享的配额保护，以及 Agent Run 的 HTTP 入口；真实模型与真实 Gateway 的完整 Agent 链路验收（Phase 10）进行中。详见 `docs/architecture/core-mvp.md`。
+项目长期分层是：用户界面 / Agent → 业务 Tool → GIS Tool → Provider → 百度地图 API。当前已完成确定性的 Core Tool、Agent 契约、Mock Gateway、三个 Agent 的离线行为、Runtime 状态判断、Graph 与 Runner、Mock 端到端场景、Phase 9 的真实 Core Service 适配器离线验证、按 AK 共享的进程内配额保护、Agent 的同步和轮询 HTTP 入口，以及三组真实语义样本按预设量表的人工复核。三组样本通过不代表有稳定通过率，也不代替独立专家或现场验证；详见 `docs/test-report/phase10-semantic-sampling-supplement-2026-09-24.md` 和 `docs/architecture/core-mvp.md`。
+
+前端读取 Run/Job 结果时应把 `completion_mode`、阶段状态、整体置信度、逐设施 `unknown_ratio` 和非空 `warnings` 一起展示。`completion_mode=normal` 表示规划／审查流程正常结束，不代表证据完整；`unknown_ratio=0` 表示没有网格被分类为 unknown，不代表全部路线成功；`confidence=high` 也不会取消响应中具体列出的 warning。若产品需要单独的“证据完整度”总指标，应通过新版本化 DTO 定义，不重新解释已有字段。
 
 ## 基线边界
 
 1. `app/schemas/common.py` 是公共 `CenterPoint`、`WarningItem`、`ErrorDetail`、`Meta` 的唯一来源。API 和 Web 复用现有 Tool/Schema，不另造数据结构；`app/schemas/api.py` 只描述 HTTP 入参。
 2. 原有 `demo/map-demo.template.html` 与 `LICENSE` 保留；正式 Web 尚未开发。
-3. 真实百度 AK 只放在本机 `.env`，不提交 Git；仓库只包含 `.env.example`。跨请求共享限速已落地（默认按免费版 3 目标/秒），但**长任务超时/取消与任务化仍未实现**，同步接口只适合受控单用户演示。
+3. 真实百度 AK 只放在本机 `.env`，不提交 Git；仓库只包含 `.env.example`。跨请求共享限速按单个 API 进程生效（默认按免费版 3 配额单位/秒：每个步行路线目标 1 单位，每次地理编码或 POI 请求 1 单位）；工具先按直线距离找近邻，网格某设施类别确认有一条 ≤1km 步行路线后会跳过该类别在该网格的其他候选，未确认覆盖时仍继续取证，未测完不能判盲。用进程内任务和配额管理器时，API 必须以单 worker 运行。多 worker/多副本会各自创建独立配额预算和任务表，现阶段不支持。Agent Job 没有取消接口，服务重启会丢失排队任务与已保存结果。
 
 本地测试（先安装 `requirements.txt`）：
 
@@ -184,6 +186,8 @@ BAIDU_QUOTA_MAX_WAIT_SECONDS=180
 python scripts/validate_contracts.py
 python -m pytest -q
 ```
+
+CI 与容器构建使用精确版本的 `requirements.lock`，默认测试不携带真实 Provider 密钥，且不会调用百度或 DeepSeek。
 
 ## 本地 API
 
@@ -196,9 +200,29 @@ set +a
 python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-浏览器访问 `http://127.0.0.1:8000/docs`。接口为 `GET /health`、`POST /api/v1/location/resolve`、`POST /api/v1/diagnosis`、`POST /api/v1/agent/runs`。前两个 POST 分别使用现有 `LocationRequest/Result`、`DiagnosisRequest/Result`；请求格式错误返回 HTTP 422 与对应失败 Envelope，工具执行失败则在 Result 的 `ok=false` 中表达。`agent/runs` 见上一节。没有 AK 时，坐标输入的 Location 仍可用，地址解析和 Diagnosis 会返回失败 Envelope，不会发起百度请求；`agent/runs` 会返回 `status=failed` 并注明缺少哪个密钥。
+浏览器访问 `http://127.0.0.1:8000/docs`。V1 接口保留原有请求与响应契约。V2 提供 `GET /api/v2/facilities`、`POST /api/v2/agent/brief`、`POST /api/v2/agent/jobs`、`GET /api/v2/agent/jobs/{job_id}`、`POST /api/v2/pois/search`、`POST /api/v2/pois/explore` 和 `POST /api/v2/routing/walking`。自然语言完整问答使用异步 Job：提交后前端轮询 `status_url`，任务完成后从 `result` 读取位置、证据、诊断/规划状态、限制和中文回答。
 
-开发环境 CORS 默认仅允许 `localhost:5173` 和 `127.0.0.1:5173`。正式部署时通过 `CORS_ORIGINS` 指定逗号分隔的明确来源，不允许 `*`；服务端 AK 不进入前端、API 响应或 Git。
+V2 目录为每个设施声明当前能力与证据限制。45 类设施均可通过统一目录与 POI 流程检索；步行时间问题和标准诊断会对最多 20 个代表点算路，超过 20 个实际检索到点位的设施类别时均匀抽样，并在限制说明中列出未取得路线样本的有点位类别。只有 `capabilities` 包含 `diagnosis` 且有受支持 `metric_profile` 的类别才可进入标准诊断；当前仍只有菜市场、药店和小学，V2 可报告已检索点位的步行可达性，但没有等时圈/人口覆盖证据采集器，因此目录不开放 `coverage` 能力，也不提供人口覆盖率或供需结论。其余设施可回答地图点位与可用路线问题，但不能据此断言容量、开放状态、服务质量或覆盖达标。目录外探索仅允许明确的设施/服务点名称，结果标记为 exploratory 且不进入标准计数、诊断或规划。POI 查询一次最多 100 类（当前目录有 45 类）、搜索半径最多 5 公里，每请求最多尝试 60 个关键词、每关键词最多翻 2 页；全目录先查询每类主词，再用剩余预算优先补查用户明确重点关注、主词无结果或点位较少的类别。未查的词继续在 `failed_queries` 标明原因。完整自然语言 Agent 运行有 8 分钟时间预算，单次 POI 搜索最多 3 分钟；时间预算耗尽时未完成类别保留为未知。若返回 `partial` 或 `unavailable`，前端应展示失败词与状态，不能把未知数量显示为 0。
+
+V2 延续 Agent、Runtime、Tool Service、Provider、Schema/API 的分层，并沿用最初架构定义的统一 Tool Gateway 边界：`app/agent_tools/gateway_v2.py` 是 `ToolGateway` 的版本化延伸，`runner_v2.py` 只通过注入的 `ToolGatewayV2` 调用位置解析、POI 检索、目录外探索、步行路线和诊断，不直接构造 Service，也不直接调用百度 Provider；真实 Service 与共享百度 Provider 统一在 `MVPToolGatewayV2`（`app/agent_tools/mvp_gateway_v2.py`）中装配。V1 继续使用 `ToolGateway` / `MVPToolGateway`，两者互不影响。V2 尚未收集等时圈和人口覆盖证据，因此相关能力未对外承诺。
+
+异步任务使用单进程内存队列：最多一个运行任务、一个等待任务，完成结果最多保留 15 分钟且不超过 32 条。它适用于单进程演示部署；服务重启会丢失任务状态，多 worker/多副本部署需要共享队列、持久化存储和分布式限速后再启用。真实百度/DeepSeek 验收通过有预算的单次测试手动触发；离线测试不会调用外部服务。自适应补查的首次真实综合测试与限额情况见 `docs/test-report/v2-adaptive-search-2026-09-28.md`。
+
+## Docker Compose 演示
+
+先将 `.env.example` 复制为 `.env` 并填入服务端密钥，然后在仓库根目录启动单 worker 容器：
+
+```bash
+docker compose up --build
+```
+
+API 默认仅发布到本机 `127.0.0.1:8000`。访问 `http://127.0.0.1:8000/docs` 验证服务，停止时运行 `docker compose down`。不要把 `.env` 打进镜像或提交仓库；镜像以非 root 用户运行。容器重启会清空内存中的任务状态。
+
+开发环境 CORS 默认仅允许 `localhost:5173` 和 `127.0.0.1:5173`。正式部署时将 `CORS_ORIGINS` 设置为前端实际使用的完整 origin（含协议、域名和端口；多个 origin 用逗号分隔），不允许 `*`。服务端 AK 不进入前端、API 响应或 Git。当前受控演示应保持一个 Uvicorn worker；多个 worker 或副本会分别持有自己的百度配额守卫和任务记录，可能超出 AK 配额且无法跨 worker 查询任务。共享限速与持久化队列留待确有多进程部署需求时再设计。
+
+API 的意外异常日志只记录 endpoint、Run/Job ID（如适用）和异常类型；不记录用户原文、密钥、请求 URL 或 Provider 响应正文。
+
+发布或交接前，请确认历史上是否曾把百度 AK 暴露在聊天或文件中；若曾暴露且尚未轮换，应先在百度控制台轮换，再更新部署环境变量。不要把密钥写入本仓库或前端配置。
 
 Tool 3/4 来源为 `core-mvp-tools-v1.zip`（SHA-256：`c9028fe8ca6e2ac1782327a4864212e377ae4923b3af9014a2c12d7ba47572f7`）。其交付时的离线测试为 `120 passed, 3 skipped`。
 
@@ -206,4 +230,4 @@ Tool 5/6 的 Contract/Schema 和 Service 完成后，接口校验通过；离线
 
 三类设施、默认业务参数的正式端到端验收于 2026-09-22 通过，详见 `docs/test-report/tool1-6-formal-acceptance-2026-09-22.md`；2026-09-19 的限流失败记录继续保留。
 
-尚未补 Docker、CI 和正式 Web；这些内容按交接文档随开发逐步加入。
+正式 Web 尚未开发。Docker 与 CI 的当前状态以仓库根目录的部署文件和 GitHub Actions 工作流为准。

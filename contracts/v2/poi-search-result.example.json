@@ -1,0 +1,51 @@
+{
+  "schema_version": "2.0",
+  "ok": true,
+  "data": {
+    "schema_version": "2.0",
+    "provider": "baidu",
+    "center": {
+      "lng": 114.3,
+      "lat": 30.5,
+      "crs": "BD09LL"
+    },
+    "pois": [
+      {
+        "poi_id": "baidu:example-1",
+        "facility_id": "library",
+        "name": "示例社区图书室",
+        "location": {
+          "lng": 114.3,
+          "lat": 30.5,
+          "crs": "BD09LL"
+        },
+        "address": "示例地址",
+        "source": "baidu",
+        "exploratory": false,
+        "query_term": "图书馆",
+        "classification_confidence": "medium"
+      }
+    ],
+    "counts": [
+      {
+        "facility_id": "library",
+        "count": 1,
+        "status": "complete"
+      },
+      {
+        "facility_id": "kindergarten",
+        "count": null,
+        "status": "unavailable"
+      }
+    ],
+    "exploratory_query": null,
+    "failed_queries": [
+      {
+        "facility_id": "kindergarten",
+        "query_term": "幼儿园",
+        "error_code": "NETWORK_ERROR",
+        "retryable": true
+      }
+    ]
+  }
+}

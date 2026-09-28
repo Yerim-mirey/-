@@ -1,0 +1,20 @@
+{
+  "schema_version": "2.0",
+  "origin": {
+    "lng": 114.3,
+    "lat": 30.5,
+    "crs": "BD09LL"
+  },
+  "targets": [
+    {
+      "target_id": "library-1",
+      "facility_id": "library",
+      "location": {
+        "lng": 114.31,
+        "lat": 30.5,
+        "crs": "BD09LL"
+      }
+    }
+  ],
+  "travel_mode": "walking"
+}

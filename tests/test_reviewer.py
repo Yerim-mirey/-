@@ -158,3 +158,95 @@ def test_provider_error_is_preserved_for_runtime():
             diagnosis_evidence(), PlanningProposal.model_validate(load("agent-planning-proposal.example.json"))
         )
     assert caught.value is error
+
+
+def test_invalid_review_output_gets_one_contract_repair_attempt():
+    valid = load("agent-review-result.example.json")
+    invalid = {"status": "approved", "unexpected": "extra"}
+
+    class RepairingLLM:
+        def __init__(self):
+            self.calls = []
+
+        def generate_object(self, *, system_prompt, user_message, response_schema):
+            self.calls.append((system_prompt, user_message, response_schema))
+            return invalid if len(self.calls) == 1 else valid
+
+    llm = RepairingLLM()
+    result = ReviewerAgent(llm).review_proposal(
+        diagnosis_evidence(), PlanningProposal.model_validate(load("agent-planning-proposal.example.json"))
+    )
+
+    assert result.status.value == "approved"
+    assert len(llm.calls) == 2
+    assert "校验" in llm.calls[1][1] or "contract" in llm.calls[1][1].lower()
+    assert '"extra"' not in llm.calls[1][1]
+    assert "unexpected" not in llm.calls[1][1]
+
+
+def test_invalid_review_output_fails_after_bounded_repair_attempt():
+    llm = RecordingLLM({"status": "approved", "unexpected": "extra"})
+
+    with pytest.raises(ReviewerOutputError):
+        ReviewerAgent(llm).review_proposal(
+            diagnosis_evidence(), PlanningProposal.model_validate(load("agent-planning-proposal.example.json"))
+        )
+
+    assert len(llm.calls) == 2
+
+
+def test_identity_mismatch_gets_one_repair_attempt():
+    valid = load("agent-review-result.example.json")
+    wrong = {**valid, "reviewed_proposal_id": "proposal:wrong"}
+
+    class RepairingLLM:
+        def __init__(self):
+            self.calls = []
+
+        def generate_object(self, *, system_prompt, user_message, response_schema):
+            self.calls.append(user_message)
+            return wrong if len(self.calls) == 1 else valid
+
+    llm = RepairingLLM()
+    result = ReviewerAgent(llm).review_proposal(
+        diagnosis_evidence(), PlanningProposal.model_validate(load("agent-planning-proposal.example.json"))
+    )
+
+    assert result.reviewed_proposal_id == "proposal:market-gap-r1"
+    assert len(llm.calls) == 2
+    assert "IDENTITY_OR_REFERENCE_MISMATCH" in llm.calls[1]
+
+
+def test_reference_mismatch_gets_one_repair_attempt():
+    valid = load("agent-review-result.example.json")
+    wrong = {
+        **valid,
+        "status": "revision_required",
+        "issues": [{
+            "issue_id": "review:unsupported-claim",
+            "category": "unsupported_fact",
+            "message": "证据引用未绑定当前输入",
+            "recommendation_ids": ["recommendation:unknown"],
+            "evidence_refs": ["diagnosis:unknown"],
+        }],
+        "revision_instructions": ["只引用当前提案和证据包中的 ID"],
+    }
+
+    class RepairingLLM:
+        def __init__(self):
+            self.calls = []
+
+        def generate_object(self, *, system_prompt, user_message, response_schema):
+            self.calls.append(user_message)
+            return wrong if len(self.calls) == 1 else valid
+
+    llm = RepairingLLM()
+    result = ReviewerAgent(llm).review_proposal(
+        diagnosis_evidence(), PlanningProposal.model_validate(load("agent-planning-proposal.example.json"))
+    )
+
+    assert result.status.value == "approved"
+    assert len(llm.calls) == 2
+    assert "IDENTITY_OR_REFERENCE_MISMATCH" in llm.calls[1]
+    assert "diagnosis:unknown" not in llm.calls[1]
+    assert "recommendation:unknown" not in llm.calls[1]

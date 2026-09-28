@@ -3,9 +3,11 @@
 Both entry points that talk to Baidu — the Core HTTP API and
 :meth:`MVPToolGateway.from_baidu_ak` — go through :func:`build_live_providers`
 so that geocoding, POI and routing for a given AK draw from the same budget.
-Without this, every request would build its own providers and each would get
-its own private quota, which is exactly the gap the 2026-09-22 acceptance
-worked around with a temporary pacing loop.
+The V2 Gateway (:meth:`MVPToolGatewayV2.from_baidu_ak`) and the V2 API tool
+endpoints go through :func:`build_live_providers_v2`, which adds the V2 POI
+profile on top of the same guard. Without this, every request would build its
+own providers and each would get its own private quota, which is exactly the gap
+the 2026-09-22 acceptance worked around with a temporary pacing loop.
 
 Configuration (all optional, read at call time):
 
@@ -29,7 +31,7 @@ from app.providers.baidu.quota import (
     BaiduQuotaGuard,
     guard_for_ak,
 )
-from app.providers.baidu.routing import BaiduRoutingProvider
+from app.providers.baidu.routing import BaiduRoutingError, BaiduRoutingProvider
 
 
 ROUTES_PER_SECOND_ENV = "BAIDU_ROUTES_PER_SECOND"
@@ -78,6 +80,61 @@ def build_live_providers(ak: str) -> LiveProviders:
         poi=BaiduPOIProvider(ak=key, quota_guard=guard),
         routing=BaiduRoutingProvider(key, quota_guard=guard),
         guard=guard,
+    )
+
+
+# V2 spends a whole-run budget (three minutes, at most 60 keywords) inside one
+# POI search, so it deliberately uses a tighter profile than the v1 default of a
+# 10-second timeout and every available page. Keeping the difference here, in the
+# single assembly point, is what stops the API tool endpoints and the V2 Gateway
+# from drifting apart or holding two separate quota guards.
+V2_POI_TIMEOUT_SECONDS = 3.0
+V2_POI_MAX_PAGES = 2
+
+
+class UnavailableRoutingProvider:
+    """Explains a missing AK without opening a connection."""
+
+    def route_matrix(self, _origin, _destinations):
+        raise BaiduRoutingError("PROVIDER_ERROR", "百度服务端 AK 未配置。", retryable=False)
+
+
+@dataclass(frozen=True, slots=True)
+class V2Providers:
+    """One AK's V2 providers, all drawing on the same quota guard."""
+
+    poi: BaiduPOIProvider
+    routing: BaiduRoutingProvider | UnavailableRoutingProvider
+    geocoding: BaiduGeocodingProvider | None
+    guard: BaiduQuotaGuard | None
+
+
+def build_live_providers_v2(ak: str) -> V2Providers:
+    """Construct the V2 tool providers without issuing any network request.
+
+    A blank AK yields explicit unavailable providers rather than a hidden
+    connection attempt: the POI provider refuses with ``MISSING_AK`` before it
+    builds a URL, and routing raises a non-retryable ``PROVIDER_ERROR``.
+    """
+    key = ak.strip() if isinstance(ak, str) else ""
+    if not key:
+        return V2Providers(
+            poi=BaiduPOIProvider(ak="", max_pages=V2_POI_MAX_PAGES),
+            routing=UnavailableRoutingProvider(),
+            geocoding=None,
+            guard=None,
+        )
+    shared = build_live_providers(key)
+    return V2Providers(
+        poi=BaiduPOIProvider(
+            ak=key,
+            timeout=V2_POI_TIMEOUT_SECONDS,
+            quota_guard=shared.guard,
+            max_pages=V2_POI_MAX_PAGES,
+        ),
+        routing=shared.routing,
+        geocoding=shared.geocoding,
+        guard=shared.guard,
     )
 
 

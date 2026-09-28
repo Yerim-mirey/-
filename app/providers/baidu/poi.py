@@ -6,6 +6,7 @@ import json
 import math
 import os
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,10 +33,18 @@ class ProviderPOI:
 class POIProviderError(RuntimeError):
     """A normalized, non-secret error from a POI provider."""
 
-    def __init__(self, code: str, message: str, retryable: bool) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        retryable: bool,
+        *,
+        partial_results: list[ProviderPOI] | None = None,
+    ) -> None:
         self.code = code
         self.message = message
         self.retryable = retryable
+        self.partial_results = partial_results or []
         super().__init__(message)
 
 
@@ -55,21 +64,32 @@ class BaiduPOIProvider:
         http_get: Callable[..., Any] | None = None,
         endpoint: str = API_URL,
         quota_guard: BaiduQuotaGuard | None = None,
+        max_pages: int | None = None,
     ) -> None:
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a positive finite number")
+        if max_pages is None:
+            max_pages = self.MAX_PAGES
+        if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not 1 <= max_pages <= self.MAX_PAGES:
+            raise ValueError(f"max_pages must be between 1 and {self.MAX_PAGES}")
         self._ak = (os.environ.get("BAIDU_MAP_AK", "") if ak is None else ak).strip()
         self._timeout = timeout
         self._http_get = http_get
         self._endpoint = endpoint
         self._quota_guard = quota_guard
+        self._max_pages = max_pages
 
     @property
     def quota_guard(self) -> BaiduQuotaGuard | None:
         return self._quota_guard
 
     def search(
-        self, keyword: str, center: CenterPoint, radius_m: int
+        self,
+        keyword: str,
+        center: CenterPoint,
+        radius_m: int,
+        *,
+        deadline_monotonic: float | None = None,
     ) -> list[ProviderPOI]:
         """Search all available pages and return only normalized POI fields."""
 
@@ -82,11 +102,18 @@ class BaiduPOIProvider:
             )
 
         pois: list[ProviderPOI] = []
-        for page_num in range(self.MAX_PAGES):
+        for page_num in range(self._max_pages):
             if self._quota_guard is not None:
                 try:
-                    self._quota_guard.acquire_call()
-                except QuotaExceededError:
+                    self._quota_guard.acquire_call(deadline_monotonic=deadline_monotonic)
+                except QuotaExceededError as exc:
+                    if exc.deadline_exceeded:
+                        raise POIProviderError(
+                            "RUN_DEADLINE_EXCEEDED",
+                            "本次运行已达到时间预算，已跳过地图检索请求。",
+                            False,
+                            partial_results=pois,
+                        ) from None
                     raise POIProviderError(
                         "RATE_LIMITED", QUOTA_MESSAGE, True
                     ) from None
@@ -101,7 +128,17 @@ class BaiduPOIProvider:
                 "page_num": str(page_num),
                 "ak": self._ak,
             }
-            payload = self._get_json(params)
+            timeout = self._timeout
+            if deadline_monotonic is not None:
+                timeout = min(timeout, deadline_monotonic - time.monotonic())
+                if timeout <= 0:
+                    raise POIProviderError(
+                        "RUN_DEADLINE_EXCEEDED",
+                        "本次运行已达到时间预算，已跳过地图检索请求。",
+                        False,
+                        partial_results=pois,
+                    )
+            payload = self._get_json(params, timeout=timeout)
             page = self._parse_page(payload)
             # radius_limit=true can make total and per-page sizes inaccurate.
             if not page.results:
@@ -112,15 +149,18 @@ class BaiduPOIProvider:
             "INCOMPLETE_RESULTS",
             "Baidu Place API pagination reached the result limit.",
             False,
+            partial_results=pois,
         )
 
-    def _get_json(self, params: Mapping[str, str]) -> Mapping[str, Any]:
+    def _get_json(
+        self, params: Mapping[str, str], *, timeout: float | None = None
+    ) -> Mapping[str, Any]:
         url = f"{self._endpoint}?{urllib.parse.urlencode(params)}"
         try:
             response = (
                 self._http_get if self._http_get is not None else urllib.request.urlopen
             )(
-                url, timeout=self._timeout
+                url, timeout=self._timeout if timeout is None else timeout
             )
             try:
                 body = response.read() if hasattr(response, "read") else response

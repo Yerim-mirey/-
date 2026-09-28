@@ -234,3 +234,134 @@ def test_stored_real_isochrone_is_processed_offline():
     assert result.root.ok
     assert result.root.data.quality.grid_cell_count > 1
     assert abs(by_type(result)["market"].unknown_ratio - 1) < 1e-12
+
+
+def test_covered_cell_stops_routing_additional_nearby_pois():
+    payload = load("blindspot-request.example.json")
+    payload["poi_request"]["search_radius_m"] = 3000
+    payload["poi_result"]["data"]["pois"][1]["facility_type"] = "pharmacy"
+    payload["poi_result"]["data"]["counts"]["pharmacy"] = 2
+    payload["poi_result"]["data"]["counts"]["primary_school"] = 0
+    request = BlindspotRequest.model_validate(payload)
+    calls = []
+
+    def route(routing_request):
+        calls.append(routing_request)
+        return mock_route(routing_request, {
+            "baidu:mock-pharmacy": 800,
+            "baidu:mock-school": 700,
+        })
+
+    result = analyze_blindspots(request, route)
+
+    assert result.root.ok
+    assert by_type(result)["pharmacy"].covered_cells == 1
+    assert result.root.data.quality.route_pairs_requested == 1
+    assert len(calls) == 1
+    assert [target.target_id for target in calls[0].targets] == ["baidu:mock-pharmacy"]
+
+
+def test_uncovered_nearest_poi_falls_through_to_next_candidate():
+    payload = load("blindspot-request.example.json")
+    payload["poi_request"]["search_radius_m"] = 3000
+    payload["poi_result"]["data"]["pois"][1]["facility_type"] = "pharmacy"
+    payload["poi_result"]["data"]["counts"]["pharmacy"] = 2
+    payload["poi_result"]["data"]["counts"]["primary_school"] = 0
+    request = BlindspotRequest.model_validate(payload)
+    calls = []
+
+    def route(routing_request):
+        calls.append(routing_request)
+        return mock_route(routing_request, {
+            "baidu:mock-pharmacy": 1200,
+            "baidu:mock-school": 800,
+        })
+
+    result = analyze_blindspots(request, route)
+
+    assert result.root.ok
+    assert by_type(result)["pharmacy"].covered_cells == 1
+    assert result.root.data.quality.route_pairs_requested == 2
+    assert [target.target_id for target in calls[0].targets] == ["baidu:mock-pharmacy"]
+    assert [target.target_id for target in calls[1].targets] == ["baidu:mock-school"]
+
+
+def test_unavailable_nearest_poi_falls_through_without_unknown_if_next_covers():
+    payload = load("blindspot-request.example.json")
+    payload["poi_request"]["search_radius_m"] = 3000
+    payload["poi_result"]["data"]["pois"][1]["facility_type"] = "pharmacy"
+    payload["poi_result"]["data"]["counts"]["pharmacy"] = 2
+    payload["poi_result"]["data"]["counts"]["primary_school"] = 0
+    request = BlindspotRequest.model_validate(payload)
+
+    def route(routing_request):
+        target_id = routing_request.targets[0].target_id
+        distance = "unavailable" if target_id == "baidu:mock-pharmacy" else 800
+        return mock_route(routing_request, {target_id: distance})
+
+    result = analyze_blindspots(request, route)
+
+    assert result.root.ok
+    assert by_type(result)["pharmacy"].covered_cells == 1
+    assert by_type(result)["pharmacy"].unknown_cells == 0
+    assert result.root.data.quality.route_pairs_requested == 2
+
+
+def test_provider_failure_does_not_probe_all_remaining_candidates():
+    payload = load("blindspot-request.example.json")
+    payload["poi_request"]["search_radius_m"] = 3000
+    payload["poi_result"]["data"]["pois"][1]["facility_type"] = "pharmacy"
+    payload["poi_result"]["data"]["counts"]["pharmacy"] = 2
+    payload["poi_result"]["data"]["counts"]["primary_school"] = 0
+    request = BlindspotRequest.model_validate(payload)
+    calls = []
+
+    def route(routing_request):
+        calls.append(routing_request)
+        return RoutingResult(root=RoutingFailure(
+            ok=False,
+            error={"code": "PROVIDER_ERROR", "message": "Unavailable", "retryable": True},
+            warnings=[], meta=Meta(schema_version="1.0", provider=None),
+        ))
+
+    result = analyze_blindspots(request, route)
+
+    assert result.root.ok
+    assert len(calls) == 1
+    assert len(calls[0].targets) == 1
+    assert by_type(result)["pharmacy"].unknown_cells == 1
+    assert result.root.data.quality.route_pairs_requested == 1
+
+
+def test_one_covered_category_does_not_stop_another_category_search():
+    payload = load("blindspot-request.example.json")
+    payload["poi_request"]["search_radius_m"] = 3000
+    pharmacy_alt = dict(payload["poi_result"]["data"]["pois"][0])
+    pharmacy_alt.update({"poi_id": "baidu:pharmacy-alt", "name": "备用药店"})
+    school_alt = dict(payload["poi_result"]["data"]["pois"][1])
+    school_alt.update({"poi_id": "baidu:school-alt", "name": "备用小学"})
+    payload["poi_result"]["data"]["pois"].extend([pharmacy_alt, school_alt])
+    payload["poi_result"]["data"]["counts"]["pharmacy"] = 2
+    payload["poi_result"]["data"]["counts"]["primary_school"] = 2
+    request = BlindspotRequest.model_validate(payload)
+    calls = []
+
+    def route(routing_request):
+        calls.append([target.target_id for target in routing_request.targets])
+        values = {
+            "baidu:mock-pharmacy": 800,
+            "baidu:mock-school": "unavailable",
+            "baidu:pharmacy-alt": 500,
+            "baidu:school-alt": 1200,
+        }
+        return mock_route(routing_request, values)
+
+    result = analyze_blindspots(request, route)
+
+    assert result.root.ok
+    coverage = by_type(result)
+    assert coverage["pharmacy"].covered_cells == 1
+    assert coverage["primary_school"].unknown_cells == 1
+    assert calls[0] == ["baidu:mock-pharmacy", "baidu:mock-school"]
+    assert calls[1] == ["baidu:school-alt"]
+    assert result.root.data.quality.route_pairs_requested == 3

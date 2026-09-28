@@ -1,5 +1,7 @@
 # 15 分钟生活圈智能体检与规划助手：DeepSeek 接手交接（截至 Agent Phase 9）
 
+> **当前状态更新（2026-09-26）**：本文下方内容是截至 2026-09-22 的历史快照，遇到冲突时以本段、[README](../README.md)、当前代码和下方 Phase 10 补测记录为准。之后已完成真实语义抽样 S2/S3；三个固定样本经人工复核均通过预设 A1–A8 量表，评分脚本的 A5/A7 误报及独立算路探针的 IPv4 设置已修正并有离线回归。新增 `POST /api/v1/agent/jobs`（202 返回任务 ID）和 `GET /api/v1/agent/jobs/{job_id}` 供长任务轮询，同时保留原同步 `POST /api/v1/agent/runs`。任务记录保存在单进程内存，最多一个运行加一个排队，进程重启后丢失；它适用于受控演示，不是分布式任务队列。相关代码与接口测试位于 `app/api/agent_jobs.py`、`app/api/main.py` 和 `tests/test_api.py`。数据语义上，`completion_mode=normal` 代表规划／审查流程正常完成，`confidence=high` 不代表所有路线完整，`unknown_ratio=0` 只代表没有网格分类为 unknown；前端应同时展示阶段状态、置信度、逐设施未知比例和非空 warnings。最新补测记录见 `docs/test-report/phase10-semantic-sampling-supplement-2026-09-24.md`。
+
 > 交接基准日：2026-09-22。本文以**本机实际仓库和本机验证结果**为准；旧交接文档是历史快照。本文中的“已完成”只对应明确写出的层次和证据，不代表完整产品已经交付。
 
 ## 0. 请先读这段结论

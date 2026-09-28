@@ -1,0 +1,22 @@
+{
+  "schema_version": "2.0",
+  "metrics": [
+    {
+      "facility_id": "kindergarten",
+      "metric_profile": null,
+      "status": "unavailable",
+      "poi_count": null,
+      "reachable_count": null,
+      "covered_ratio": null,
+      "time_limit_s": null,
+      "service_distance_m": null,
+      "unsupported_dimensions": [
+        "spatial_coverage",
+        "planning_recommendation",
+        "standard_diagnosis"
+      ],
+      "reason_code": "DIAGNOSIS_NOT_SUPPORTED"
+    }
+  ],
+  "quality": "unavailable"
+}

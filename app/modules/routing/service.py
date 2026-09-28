@@ -51,17 +51,39 @@ class RoutingService:
             raise ValueError("batch_size 必须是正整数。")
         self.batch_size = min(batch_size, WALKING_MATRIX_MAX_ROUTES)
 
-    def route(self, request: RoutingRequest) -> RoutingResult:
+    def route(
+        self,
+        request: RoutingRequest,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> RoutingResult:
         routes: list[RouteResult] = []
         first_error: BaiduRoutingError | None = None
         successful_batches = 0
 
-        for batch in iter_batches(request.targets, self.batch_size):
+        batches = iter_batches(request.targets, self.batch_size)
+        for batch in batches:
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                first_error = first_error or BaiduRoutingError(
+                    "TIMEOUT", "本次运行已达到时间预算，部分路线未计算。", retryable=False
+                )
+                routes.extend(_unavailable(target) for pending in [batch, *batches] for target in pending)
+                break
             try:
-                provider_routes = self._route_batch(request, batch)
+                if deadline_monotonic is None:
+                    provider_routes = self._route_batch(request, batch)
+                else:
+                    provider_routes = self._route_batch(
+                        request, batch, deadline_monotonic
+                    )
             except BaiduRoutingError as exc:
                 first_error = first_error or exc
                 routes.extend(_unavailable(target) for target in batch)
+                if deadline_monotonic is not None and (
+                    exc.code == "RATE_LIMITED" or time.monotonic() >= deadline_monotonic
+                ):
+                    routes.extend(_unavailable(target) for pending in batches for target in pending)
+                    break
                 continue
             successful_batches += 1
             routes.extend(
@@ -123,17 +145,37 @@ class RoutingService:
         )
 
     def _route_batch(
-        self, request: RoutingRequest, batch: list[RouteTarget]
+        self,
+        request: RoutingRequest,
+        batch: list[RouteTarget],
+        deadline_monotonic: float | None = None,
     ) -> list[ProviderRoute]:
         for attempt in range(self.max_retries + 1):
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                raise BaiduRoutingError(
+                    "TIMEOUT", "本次运行已达到时间预算，已跳过步行路线请求。", retryable=False
+                )
             try:
+                destinations = [target.location for target in batch]
+                if deadline_monotonic is None:
+                    return self.provider.route_matrix(request.origin, destinations)
                 return self.provider.route_matrix(
-                    request.origin, [target.location for target in batch]
+                    request.origin, destinations, deadline_monotonic=deadline_monotonic
                 )
             except BaiduRoutingError as exc:
-                if not exc.retryable or attempt == self.max_retries:
+                if (
+                    not exc.retryable
+                    or attempt == self.max_retries
+                    or deadline_monotonic is not None
+                    and (exc.code == "RATE_LIMITED" or time.monotonic() >= deadline_monotonic)
+                ):
                     raise
-                self.sleep(self.retry_delay_seconds * (attempt + 1))
+                delay = self.retry_delay_seconds * (attempt + 1)
+                if deadline_monotonic is not None:
+                    delay = min(delay, max(0.0, deadline_monotonic - time.monotonic()))
+                if delay <= 0:
+                    raise
+                self.sleep(delay)
         raise AssertionError("unreachable")
 
 
